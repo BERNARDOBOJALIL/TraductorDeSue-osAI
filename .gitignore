@@ -1,0 +1,27 @@
+# Python bytecode y cachés
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales (venv)
+.venv/
+venv/
+env/
+ENV/
+*.venv/
+*.venv
+*venv/
+
+# Variables de entorno locales
+.env
+.env.*
+
+# Archivos de sistema / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Archivos generados por la app (ajusta si quieres versionarlos)
+# sueño_interpretado.txt.env
+gen-lang-client-0333146377-a171f38689c3.json
