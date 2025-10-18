@@ -2,15 +2,18 @@
 ======================================================
  Traductor de Sueños - Agente basado en Gemini AI
 ======================================================
-Correcciones clave:
-- Alinea la variable de entorno esperada a GOOGLE_API_KEY (acepta GEMINI_API_KEY como alias).
-- Usa el pipeline `prompt | llm | StrOutputParser()` y `invoke()` (sin deprecaciones).
-- Suprime mensajes ruidosos de gRPC/absl al importar el cliente.
-- Fallback local si el modelo no responde o no hay clave: nunca escribe vacío.
+Bernardo Bojalil Lorenzini - 195908
+Agentes Inteligentes
+Otoño 2025
+18 de octubre de 2025
+
 """
 
 import os
+import json
 import warnings
+from uuid import uuid4
+from datetime import datetime
 from contextlib import redirect_stderr
 from dotenv import load_dotenv
 
@@ -69,6 +72,146 @@ if not google_key and gemini_key:
     os.environ["GOOGLE_API_KEY"] = gemini_key
     google_key = gemini_key
 
+# ==================== Memoria persistente ====================
+MEMORY_PATH = os.getenv("MEMORY_PATH", "memoria_agente.json")
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+def cargar_memoria() -> dict:
+    try:
+        if os.path.exists(MEMORY_PATH):
+            with open(MEMORY_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    data.setdefault("sessions", [])
+                    return data
+        return {"sessions": []}
+    except Exception:
+        # En caso de corrupción del archivo, iniciar limpio
+        return {"sessions": []}
+
+def guardar_memoria(mem: dict) -> None:
+    try:
+        with open(MEMORY_PATH, "w", encoding="utf-8") as f:
+            json.dump(mem, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        msg = f"No se pudo guardar la memoria persistente: {e}"
+        print((Fore.YELLOW + msg + Style.RESET_ALL) if HAVE_COLORAMA else msg)
+
+MEM = cargar_memoria()
+
+def _crear_sesion(ruta_sueno: str, texto_sueno: str, contexto: str, interpretacion: str, ruta_salida: str | None) -> str:
+    ses_id = str(uuid4())
+    resumen_interpretacion = extraer_bloque_por_titulo(interpretacion, "Interpretación general") or resumen_corto(interpretacion, 240)
+    ses = {
+        "id": ses_id,
+        "created_at": _now_iso(),
+        "archivo": ruta_sueno,
+        "output_file": ruta_salida,
+        "contexto_emocional": contexto,
+        "texto_sueno": texto_sueno,
+        "interpretacion": interpretacion,
+        "interpretacion_resumen": resumen_interpretacion,
+        "followups": [],
+    }
+    MEM["sessions"].append(ses)
+    guardar_memoria(MEM)
+    return ses_id
+
+def _buscar_sesion(sesion_id: str) -> dict | None:
+    for s in MEM.get("sessions", []):
+        if s.get("id") == sesion_id:
+            return s
+    return None
+
+def _agregar_followup(sesion_id: str, pregunta: str, respuesta: str) -> None:
+    s = _buscar_sesion(sesion_id)
+    if not s:
+        return
+    s.setdefault("followups", []).append({
+        "at": _now_iso(),
+        "question": pregunta,
+        "answer": respuesta,
+    })
+    guardar_memoria(MEM)
+
+def _historial_followup_texto(s: dict, max_items: int = 5) -> str:
+    fl = s.get("followups", [])[-max_items:]
+    if not fl:
+        return "(sin historial)"
+    partes = []
+    for item in fl:
+        partes.append(f"Q: {item.get('question','')}\nA: {item.get('answer','')}")
+    return "\n".join(partes)
+
+def _resumen_ultimas_sesiones(n: int = 5) -> list[dict]:
+    """Devuelve un arreglo con resumen de las últimas n sesiones (más recientes primero)."""
+    sesiones = MEM.get("sessions", [])
+    ordenadas = sorted(sesiones, key=lambda x: x.get("created_at", ""), reverse=True)
+    res = []
+    for s in ordenadas[: max(0, n)]:
+        item = {
+            "id": s.get("id"),
+            "created_at": s.get("created_at"),
+            "archivo": s.get("archivo"),
+            "interpretacion_resumen": (s.get("interpretacion_resumen") or "").strip(),
+            "output_file": s.get("output_file"),
+        }
+        res.append(item)
+    return res
+
+def _mostrar_resumen_ultimos(n: int = 5) -> None:
+    """Imprime un resumen compacto de los últimos n sueños guardados."""
+    resumenes = _resumen_ultimas_sesiones(n)
+    if not resumenes:
+        msg = "No hay sesiones previas guardadas."
+        print((Fore.YELLOW + msg + Style.RESET_ALL) if HAVE_COLORAMA else msg)
+        return
+    titulo = f"\n📘 Últimos {len(resumenes)} sueños"
+    print(Fore.CYAN + titulo + Style.RESET_ALL if HAVE_COLORAMA else titulo)
+    for i, r in enumerate(resumenes, 1):
+        fecha = r.get("created_at", "?")
+        archivo = os.path.basename(r.get("archivo", "?"))
+        ig = r.get("interpretacion_resumen", "")
+        if len(ig) > 180:
+            ig = ig[:179].rstrip() + "…"
+        linea = f"{i}. [{fecha}] {archivo}\n   → {ig}"
+        print(Fore.WHITE + linea + Style.RESET_ALL if HAVE_COLORAMA else linea)
+
+def _memoria_json_compacta(max_sessions: int = 5, max_followups: int = 3, max_chars: int = 20000) -> str:
+    """Devuelve un JSON compacto con las últimas sesiones para usar como contexto.
+    Limita cantidad de sesiones, follow-ups y tamaño total para evitar prompts excesivos.
+    Controlable vía env vars: PREVIOUS_N, PREV_FOLLOWUPS_N, PREV_JSON_MAX_CHARS.
+    """
+    try:
+        sesiones = MEM.get("sessions", [])
+        ordenadas = sorted(sesiones, key=lambda x: x.get("created_at", ""), reverse=True)[: max(0, max_sessions)]
+        recortadas = []
+        for s in ordenadas:
+            fu = s.get("followups", []) or []
+            if max_followups > 0:
+                fu = fu[-max_followups:]
+            recortadas.append({
+                "id": s.get("id"),
+                "created_at": s.get("created_at"),
+                "archivo": s.get("archivo"),
+                "contexto_emocional": s.get("contexto_emocional"),
+                "interpretacion_resumen": s.get("interpretacion_resumen"),
+                "followups": fu,
+            })
+        data = {"sessions": recortadas}
+        texto = json.dumps(data, ensure_ascii=False, indent=2)
+        if len(texto) > max_chars:
+            # Compactar y, si aún es largo, truncar con marca
+            texto_comp = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            if len(texto_comp) > max_chars:
+                return texto_comp[: max_chars - 1].rstrip() + "…"
+            return texto_comp
+        return texto
+    except Exception as e:
+        return f"{{\"error\": \"no se pudo construir memoria json: {str(e)}\"}}"
+    
 def construir_cadena_interprete():
     """Crea y devuelve una cadena (Runnable) de interpretación si LangChain y la clave están disponibles."""
     if not LANGCHAIN_OK or not google_key or ChatGoogleGenerativeAI is None or PromptTemplate is None:
@@ -83,7 +226,7 @@ def construir_cadena_interprete():
 
     # 4) Prompt para el traductor de sueños
     prompt_template = PromptTemplate(
-        input_variables=["texto_sueno", "contexto_emocional"],
+        input_variables=["texto_sueno", "contexto_emocional", "memoria_json"],
         template=(
             """
 Eres un analista onírico con conocimientos en psicología simbólica, arquetipos jungianos,
@@ -93,6 +236,10 @@ te proporciona el usuario, identificando símbolos, emociones, arquetipos y posi
 Analiza con empatía y profundidad, evitando respuestas genéricas. Usa un lenguaje accesible, reflexivo y poético,
 pero con base psicológica. No hables de predicciones o supersticiones, sino de interpretaciones emocionales y simbólicas.
 
+Dispones de un contexto en formato JSON con resúmenes de sueños previos del usuario (ver sección "SUEÑOS PREVIOS DEL USUARIO (JSON)").
+Úsalo para detectar patrones y símbolos recurrentes, señalar posibles evoluciones del material onírico y establecer relaciones
+claras y útiles entre el sueño actual y los anteriores. Si no hay relación sólida, indícalo explícitamente y no inventes detalles.
+
 ---
 SUEÑO DESCRITO:
 {texto_sueno}
@@ -100,12 +247,16 @@ SUEÑO DESCRITO:
 CONTEXTO EMOCIONAL:
 {contexto_emocional}
 
+SUEÑOS PREVIOS DEL USUARIO (JSON):
+{memoria_json}
+
 ---
 Tu respuesta debe incluir:
 1. Un resumen simbólico del sueño (en tono narrativo breve).
 2. Un análisis psicológico de los principales símbolos, emociones o acciones.
 3. Una interpretación general: ¿qué podría estar expresando el inconsciente?
 4. Un consejo o reflexión integradora, invitando al autoconocimiento.
+Puedes mencionar brevemente coincidencias o patrones con sueños previos solo cuando aporten claridad (máximo 2–3 oraciones sobre esto).
 ---
 """
         ),
@@ -132,7 +283,7 @@ def construir_cadena_followup():
     )
 
     prompt_template = PromptTemplate(
-        input_variables=["texto_sueno", "contexto_emocional", "interpretacion_previa", "pregunta"],
+        input_variables=["texto_sueno", "contexto_emocional", "interpretacion_previa", "pregunta", "historial"],
         template=(
             """
 Eres un analista onírico. Responde de forma breve (máximo 3–5 frases) y concreta a la pregunta
@@ -149,6 +300,9 @@ CONTEXTO EMOCIONAL:
 
 INTERPRETACIÓN PREVIA:
 {interpretacion_previa}
+
+HISTORIAL RECIENTE DE FOLLOW-UPS (Q/A):
+{historial}
 
 PREGUNTA DE SEGUIMIENTO:
 {pregunta}
@@ -285,13 +439,13 @@ def extraer_bloque_por_titulo(texto: str, titulo: str) -> str | None:
     return bloque or None
 
 
-def interpretar_y_guardar(ruta_sueno: str, contexto_emocional: str) -> tuple[None | str, str]:
-    """Ejecuta la interpretación (online u offline), guarda el archivo y
-    devuelve (ruta_salida, interpretacion).
+def interpretar_y_guardar(ruta_sueno: str, contexto_emocional: str) -> tuple[None | str, str, str | None]:
+    """Ejecuta la interpretación con el LLM, guarda el archivo y
+    devuelve (ruta_salida, interpretacion, sesion_id). Si falla, retorna (None, "", None).
     """
     texto_sueno = leer_sueno(ruta_sueno)
     if texto_sueno is None:
-        return None, ""
+        return None, "", None
 
     interpretando = "\n🔮 Interpretando tu sueño...\n"
     print((Fore.MAGENTA + interpretando + Style.RESET_ALL) if HAVE_COLORAMA else interpretando)
@@ -302,9 +456,24 @@ def interpretar_y_guardar(ruta_sueno: str, contexto_emocional: str) -> tuple[Non
         try:
             # Usar invoke/run según implementación actual
             try:
+                # Config desde env
+                try:
+                    prev_n = int(os.getenv("PREVIOUS_N", "5"))
+                except ValueError:
+                    prev_n = 5
+                try:
+                    prev_fu_n = int(os.getenv("PREV_FOLLOWUPS_N", "3"))
+                except ValueError:
+                    prev_fu_n = 3
+                try:
+                    prev_json_max = int(os.getenv("PREV_JSON_MAX_CHARS", "20000"))
+                except ValueError:
+                    prev_json_max = 20000
+                memoria_json = _memoria_json_compacta(prev_n, prev_fu_n, prev_json_max)
                 res = chain.invoke({
                     "texto_sueno": texto_sueno,
                     "contexto_emocional": contexto_emocional,
+                    "memoria_json": memoria_json,
                 })
                 if isinstance(res, str):
                     interpretacion = res
@@ -323,30 +492,20 @@ def interpretar_y_guardar(ruta_sueno: str, contexto_emocional: str) -> tuple[Non
                     "contexto_emocional": contexto_emocional,
                 })
         except Exception as e:
-            aviso = f"Aviso: no se pudo usar Gemini ({e}). Se usará un análisis básico offline."
+            aviso = f"Aviso: no se pudo usar Gemini ({e}). No se generará interpretación."
             print((Fore.YELLOW + aviso + Style.RESET_ALL) if HAVE_COLORAMA else aviso)
 
     if not (interpretacion or "").strip():
-        interpretacion = interpretar_offline(texto_sueno, contexto_emocional)
+        msg = "No se generó interpretación (verifica tu API key y conexión)."
+        print((Fore.YELLOW + msg + Style.RESET_ALL) if HAVE_COLORAMA else msg)
+        return None, "", None
 
     ruta_salida = guardar_interpretacion(ruta_sueno, interpretacion)
-    return ruta_salida, interpretacion
+    sesion_id = _crear_sesion(ruta_sueno, texto_sueno, contexto_emocional, interpretacion, ruta_salida)
+    return ruta_salida, interpretacion, sesion_id
 
 
-def responder_followup_offline(interpretacion: str, pregunta: str) -> str:
-    """Responde de forma breve usando la interpretación previa como base, sin LLM."""
-    base = extraer_bloque_por_titulo(interpretacion, "Interpretación general") or resumen_corto(interpretacion, 240)
-    pregunta = (pregunta or "").strip()
-    if not base:
-        return "Con la información disponible, sólo puedo sugerir observar cómo se relaciona este sueño con tus emociones recientes."
-    # Heurística simple: referencia la interpretación general
-    respuesta = (
-        "Según la interpretación general, este sueño apunta a procesos de integración emocional. "
-        "En tu pregunta, percibo interés por detalles específicos: considera cómo los símbolos clave conectan con tu situación actual. "
-        "Si algo no encaja, anota nuevos sueños o sensaciones para refinar el sentido."
-    )
-    # Limitar extensión
-    return respuesta[:380]
+# (sin fallback offline de follow-up)
 
 
 def ejecuta_tarea():
@@ -363,7 +522,7 @@ def ejecuta_tarea():
     if os.getenv("AUTO_RUN") == "1":
         auto_msg = "(AUTO_RUN=1) Usando archivo por defecto 'sueño.txt' y contexto vacío.\n"
         print((Fore.BLUE + auto_msg + Style.RESET_ALL) if HAVE_COLORAMA else auto_msg)
-        ruta_salida, interpretacion = interpretar_y_guardar("sueño.txt", "")
+        ruta_salida, interpretacion, sesion_id = interpretar_y_guardar("sueño.txt", "")
         if (interpretacion or "").strip():
             bloque = extraer_bloque_por_titulo(interpretacion, "Interpretación general") or resumen_corto(interpretacion, 280)
             encabezado = "--- Interpretación general ---\n"
@@ -384,20 +543,30 @@ def ejecuta_tarea():
                 print((Fore.CYAN + "\n🤔 Seguimiento:" + Style.RESET_ALL) if HAVE_COLORAMA else "\n🤔 Seguimiento:")
                 try:
                     if chain_fu is not None:
+                        ses = _buscar_sesion(sesion_id) if sesion_id else None
+                        historial_txt = _historial_followup_texto(ses or {})
                         resp = chain_fu.invoke({
                             "texto_sueno": leer_sueno("sueño.txt") or "",
                             "contexto_emocional": "",
                             "interpretacion_previa": interpretacion,
                             "pregunta": pregunta_auto,
+                            "historial": historial_txt,
                         })
                         if not isinstance(resp, str):
                             resp = getattr(resp, "content", None) or str(resp)
                     else:
-                        resp = responder_followup_offline(interpretacion, pregunta_auto)
+                        raise RuntimeError("Cadena de follow-up no disponible (revisa API/red)")
                     print(Fore.WHITE + str(resp) + Style.RESET_ALL if HAVE_COLORAMA else str(resp))
                 except Exception as e:
                     msg = f"No fue posible responder el seguimiento automáticamente: {e}"
                     print((Fore.YELLOW + msg + Style.RESET_ALL) if HAVE_COLORAMA else msg)
+            # Mostrar resumen de últimos sueños si se solicita
+            if os.getenv("SHOW_SUMMARY", "0") == "1":
+                try:
+                    n = int(os.getenv("SUMMARY_N", "5"))
+                except ValueError:
+                    n = 5
+                _mostrar_resumen_ultimos(n)
         return
 
     # Bucle simple: interpretar uno y preguntar si se desea otro
@@ -405,7 +574,7 @@ def ejecuta_tarea():
         ruta = input("📝 Ruta del archivo (Enter para 'sueño.txt'): ").strip() or "sueño.txt"
         ctx = input("💭 ¿Cómo te sentiste durante o después del sueño? (opcional): ").strip()
 
-        ruta_salida, interpretacion = interpretar_y_guardar(ruta, ctx)
+        ruta_salida, interpretacion, sesion_id = interpretar_y_guardar(ruta, ctx)
         if (interpretacion or "").strip():
             bloque = extraer_bloque_por_titulo(interpretacion, "Interpretación general") or resumen_corto(interpretacion, 280)
             encabezado = "--- Interpretación general ---\n"
@@ -428,20 +597,32 @@ def ejecuta_tarea():
             print((Fore.CYAN + "\n🤔 Seguimiento:" + Style.RESET_ALL) if HAVE_COLORAMA else "\n🤔 Seguimiento:")
             try:
                 if chain_fu is not None:
+                    ses = _buscar_sesion(sesion_id) if sesion_id else None
+                    historial_txt = _historial_followup_texto(ses or {})
                     resp = chain_fu.invoke({
                         "texto_sueno": leer_sueno(ruta) or "",
                         "contexto_emocional": ctx,
                         "interpretacion_previa": interpretacion,
                         "pregunta": q,
+                        "historial": historial_txt,
                     })
                     if not isinstance(resp, str):
                         resp = getattr(resp, "content", None) or str(resp)
                 else:
-                    resp = responder_followup_offline(interpretacion, q)
+                    raise RuntimeError("Cadena de follow-up no disponible (revisa API/red)")
+                # guardar en memoria persistente
+                if sesion_id:
+                    _agregar_followup(sesion_id, q, str(resp))
                 print(Fore.WHITE + str(resp) + Style.RESET_ALL if HAVE_COLORAMA else str(resp))
             except Exception as e:
                 msg = f"No fue posible responder el seguimiento: {e}"
                 print((Fore.YELLOW + msg + Style.RESET_ALL) if HAVE_COLORAMA else msg)
+        
+        # Mostrar un resumen breve de los últimos sueños tras cada interpretación
+        try:
+            _mostrar_resumen_ultimos(5)
+        except Exception:
+            pass
 
         otra = input("\n¿Interpretar otro sueño? (s/n): ").strip().lower()
         if otra not in {"s", "si", "sí"}:
