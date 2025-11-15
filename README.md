@@ -117,3 +117,81 @@ Elige la opción 2 para ver un listado compacto de los últimos sueños guardado
 - Cada ejecución se guarda en `memoria_agente.json` con: fecha, archivo de entrada, contexto emocional, interpretación completa, un extracto de “Interpretación general” y el historial de preguntas/respuestas de seguimiento.
 - En modo interactivo, al terminar una interpretación se imprime automáticamente un resumen compacto de las últimas sesiones.
 - En AUTO_RUN, puedes activar `SHOW_SUMMARY=1` (y opcional `SUMMARY_N`) para mostrar el mismo resumen.
+
+## API (FastAPI)
+
+Se agregó una API mínima con FastAPI que reutiliza la lógica existente del proyecto. No se modificó tu `.env` ni se añadieron archivos innecesarios.
+
+### Ejecutar la API
+
+Instala dependencias (si no lo hiciste) y levanta el servidor con Uvicorn:
+
+```powershell
+pip install -r requirements.txt
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
+```
+
+- Documentación interactiva: `http://127.0.0.1:8000/docs`
+- Redoc: `http://127.0.0.1:8000/redoc`
+
+### Endpoints
+
+- `GET /health`: Estado básico del servicio y disponibilidad del LLM.
+
+- `POST /interpret-text`
+  - Body JSON:
+    - `texto_sueno` (string, requerido): descripción del sueño.
+    - `contexto_emocional` (string, opcional): contexto emocional.
+    - `save` (bool, opcional, por defecto false): si true, guarda la interpretación en archivo.
+    - `filename` (string, opcional): nombre base del archivo para el guardado (si `save=true`).
+  - Respuesta JSON:
+    - `interpretacion` (string): interpretación completa.
+    - `ruta_salida` (string|null): ruta del archivo guardado si aplica.
+    - `sesion_id` (string|null): id de sesión persistida.
+
+- `POST /interpret-file`
+  - Body JSON:
+    - `ruta` (string, requerido): ruta del archivo del sueño (UTF-8).
+    - `contexto_emocional` (string, opcional): contexto emocional.
+  - Respuesta JSON:
+    - `interpretacion` (string)
+    - `ruta_salida` (string|null)
+    - `sesion_id` (string|null)
+
+- `GET /sessions?limit=5`
+  - Devuelve un resumen de las últimas sesiones guardadas (`id`, `created_at`, `archivo`, extracto de `interpretacion_resumen`, `output_file`).
+
+- `GET /sessions/{sesion_id}`
+  - Devuelve el contenido completo de la sesión (incluye follow-ups).
+
+- `POST /sessions/{sesion_id}/followup`
+  - Body JSON:
+    - `pregunta` (string, requerido): pregunta de seguimiento.
+  - Respuesta JSON:
+    - `respuesta` (string): respuesta breve del analista onírico.
+
+### Notas
+
+- La API reusa la memoria persistente `memoria_agente.json` para mantener sesiones y follow-ups.
+- Si el LLM no está disponible, `POST /interpret-text` usa un fallback offline para no retornar vacío.
+
+### MongoDB Atlas (opcional)
+
+Si defines estas variables de entorno, la API usará MongoDB Atlas para guardar y consultar sesiones (en lugar del archivo JSON):
+
+- `MONGODB_URI`: cadena de conexión de MongoDB Atlas.
+- `MONGODB_DB` (opcional, por defecto `ai_dreams`): nombre de la base.
+- `MONGODB_COLLECTION` (opcional, por defecto `sessions`): colección de sesiones.
+
+Ejemplo en PowerShell (sin modificar tu `.env` existente):
+
+```powershell
+$env:MONGODB_URI = "mongodb+srv://<user>:<pass>@<cluster>/...?retryWrites=true&w=majority"
+$env:MONGODB_DB = "ai_dreams"
+$env:MONGODB_COLLECTION = "sessions"
+uvicorn app:app --reload --port 8000
+```
+
+Notas:
+- Los endpoints `/sessions`, `/sessions/{id}` y `POST /sessions/{id}/followup` priorizan Mongo cuando está configurado; si no, usan el almacenamiento JSON existente.
+- `POST /interpret-file` seguirá guardando la interpretación en disco (si aplica) y, además, reflejará la sesión en Mongo cuando esté disponible.
