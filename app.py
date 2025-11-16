@@ -78,7 +78,7 @@ def _get_mongo_collection():
 
 def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, interpretacion: str, ruta_salida: Optional[str]):
     col = _get_mongo_collection()
-    if not col:
+    if col is None:
         return None
     ses_id = str(uuid4())
     # obtener resumen como en el archivo original
@@ -108,7 +108,7 @@ def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, inte
 
 def _mongo_get_session(sesion_id: str):
     col = _get_mongo_collection()
-    if not col:
+    if col is None:
         return None
     try:
         doc = col.find_one({"id": sesion_id}, {"_id": 0})
@@ -119,7 +119,7 @@ def _mongo_get_session(sesion_id: str):
 
 def _mongo_list_sessions(limit: int = 5):
     col = _get_mongo_collection()
-    if not col:
+    if col is None:
         return None
     try:
         cur = col.find({}, {"_id": 0, "id": 1, "created_at": 1, "archivo": 1, "interpretacion_resumen": 1, "output_file": 1}).sort("created_at", -1).limit(max(1, limit))
@@ -130,7 +130,7 @@ def _mongo_list_sessions(limit: int = 5):
 
 def _mongo_add_followup(sesion_id: str, pregunta: str, respuesta: str):
     col = _get_mongo_collection()
-    if not col:
+    if col is None:
         return False
     try:
         update = {
