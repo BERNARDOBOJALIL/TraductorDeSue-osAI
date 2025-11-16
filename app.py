@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, AliasChoices
 from typing import Optional, List, Dict, Any
+import concurrent.futures
 import os
 from uuid import uuid4
 
@@ -164,8 +165,8 @@ def interpret_text(req: InterpretTextRequest) -> Dict[str, Any]:
     if not texto:
         raise HTTPException(status_code=400, detail="texto_sueno requerido")
 
-    # Modo offline forzado si se solicita
-    if bool(req.offline):
+    # Modo offline forzado si se solicita o por env
+    if bool(req.offline) or os.getenv("FORCE_OFFLINE", "0") == "1":
         interpretacion = interpretar_offline(texto, req.contexto_emocional or "")
         ruta_salida: Optional[str] = None
         if req.save:
@@ -206,13 +207,22 @@ def interpret_text(req: InterpretTextRequest) -> Dict[str, Any]:
                 prev_json_max = 20000
             memoria_json = _memoria_json_compacta(prev_n, prev_fu_n, prev_json_max)
 
-            res = chain.invoke(
-                {
-                    "texto_sueno": texto,
-                    "contexto_emocional": req.contexto_emocional or "",
-                    "memoria_json": memoria_json,
-                }
-            )
+            payload = {
+                "texto_sueno": texto,
+                "contexto_emocional": req.contexto_emocional or "",
+                "memoria_json": memoria_json,
+            }
+            try:
+                timeout_secs = int(os.getenv("LLM_TIMEOUT_SECS", "20"))
+            except Exception:
+                timeout_secs = 20
+
+            def _invoke():
+                return chain.invoke(payload)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(_invoke)
+                res = fut.result(timeout=timeout_secs)
             if isinstance(res, str):
                 interpretacion = res
             else:
@@ -223,6 +233,9 @@ def interpret_text(req: InterpretTextRequest) -> Dict[str, Any]:
                     interpretacion = str(res.get("text", ""))
                 else:
                     interpretacion = str(res)
+        except concurrent.futures.TimeoutError:
+            # Exceso de tiempo: usar fallback offline
+            interpretacion = ""
         except Exception:
             interpretacion = ""
 
@@ -340,18 +353,29 @@ def followup(sesion_id: str, req: FollowupRequest) -> Dict[str, Any]:
         except Exception:
             historial_txt = ""
 
-        resp = chain_fu.invoke(
-            {
-                "texto_sueno": s.get("texto_sueno", ""),
-                "contexto_emocional": s.get("contexto_emocional", ""),
-                "interpretacion_previa": s.get("interpretacion", ""),
-                "pregunta": pregunta,
-                "historial": historial_txt,
-            }
-        )
+        payload_fu = {
+            "texto_sueno": s.get("texto_sueno", ""),
+            "contexto_emocional": s.get("contexto_emocional", ""),
+            "interpretacion_previa": s.get("interpretacion", ""),
+            "pregunta": pregunta,
+            "historial": historial_txt,
+        }
+        try:
+            timeout_secs = int(os.getenv("LLM_TIMEOUT_SECS", "20"))
+        except Exception:
+            timeout_secs = 20
+
+        def _invoke_fu():
+            return chain_fu.invoke(payload_fu)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_invoke_fu)
+            resp = fut.result(timeout=timeout_secs)
         if not isinstance(resp, str):
             resp = getattr(resp, "content", None) or str(resp)
         respuesta = str(resp)
+    except concurrent.futures.TimeoutError as e:
+        raise HTTPException(status_code=504, detail="Tiempo de espera agotado para follow-up")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"No fue posible responder el seguimiento: {e}")
 
