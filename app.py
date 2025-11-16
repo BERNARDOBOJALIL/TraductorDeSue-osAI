@@ -33,6 +33,7 @@ class InterpretTextRequest(BaseModel):
         None,
         description="Nombre base del archivo del sueño para nombrar la salida (solo si save=True)",
     )
+    offline: Optional[bool] = Field(False, description="Si true, fuerza modo offline sin LLM")
 
     model_config = {
         "populate_by_name": True,
@@ -162,6 +163,27 @@ def interpret_text(req: InterpretTextRequest) -> Dict[str, Any]:
     texto = (req.texto_sueno or "").strip()
     if not texto:
         raise HTTPException(status_code=400, detail="texto_sueno requerido")
+
+    # Modo offline forzado si se solicita
+    if bool(req.offline):
+        interpretacion = interpretar_offline(texto, req.contexto_emocional or "")
+        ruta_salida: Optional[str] = None
+        if req.save:
+            base = req.filename if (req.filename and req.filename.strip()) else "sueño_api.txt"
+            try:
+                from reporte6_BernardoBojalil import guardar_interpretacion
+                ruta_salida = guardar_interpretacion(base, interpretacion)
+            except Exception:
+                ruta_salida = None
+        sesion_id = None
+        if _get_mongo_collection() is not None:
+            sesion_id = _mongo_create_session(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida)
+        if not sesion_id:
+            try:
+                sesion_id = _crear_sesion(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida)
+            except Exception:
+                sesion_id = None
+        return {"interpretacion": interpretacion, "ruta_salida": ruta_salida, "sesion_id": sesion_id}
 
     chain = construir_cadena_interprete()
     interpretacion = ""
