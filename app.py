@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 from typing import Optional, List, Dict, Any
 import os
 from uuid import uuid4
@@ -21,13 +21,23 @@ app = FastAPI(title="Traductor de Sueños API", version="1.0.0")
 
 
 class InterpretTextRequest(BaseModel):
-    texto_sueno: str = Field(..., description="Descripción del sueño en texto plano")
+    # Acepta tanto "texto_sueno" como "texto_sueño" en el body
+    texto_sueno: str = Field(
+        ...,
+        description="Descripción del sueño en texto plano",
+        validation_alias=AliasChoices("texto_sueno", "texto_sueño"),
+    )
     contexto_emocional: Optional[str] = Field("", description="Contexto emocional opcional")
     save: bool = Field(False, description="Si True, guarda interpretación en archivo")
     filename: Optional[str] = Field(
         None,
         description="Nombre base del archivo del sueño para nombrar la salida (solo si save=True)",
     )
+
+    model_config = {
+        "populate_by_name": True,
+        "str_strip_whitespace": True,
+    }
 
 
 class InterpretFileRequest(BaseModel):
