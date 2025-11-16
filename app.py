@@ -20,6 +20,16 @@ from reporte6_BernardoBojalil import (
 
 app = FastAPI(title="Traductor de Sueños API", version="1.0.0")
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],    # ← prueba todo abierto
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 class InterpretTextRequest(BaseModel):
     # Acepta tanto "texto_sueno" como "texto_sueño" en el body
