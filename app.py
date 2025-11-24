@@ -1,9 +1,13 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, AliasChoices
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field, AliasChoices, EmailStr
 from typing import Optional, List, Dict, Any
 import concurrent.futures
 import os
 from uuid import uuid4
+from datetime import datetime, timedelta
+from passlib.context import CryptContext
+from jose import JWTError, jwt
 
 # Reuse existing project logic
 from reporte6_BernardoBojalil import (
@@ -20,15 +24,43 @@ from reporte6_BernardoBojalil import (
 
 app = FastAPI(title="Traductor de Sueños API", version="1.0.0")
 
+# Security
+SECRET_KEY = os.getenv("SECRET_KEY", "tu-secret-key-super-segura-cambiala-en-produccion")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))  # 7 días por defecto
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer()
+
 from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],    # ← prueba todo abierto
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Auth Models ---
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    nombre: Optional[str] = None
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    nombre: Optional[str] = None
+    created_at: str
 
 
 class InterpretTextRequest(BaseModel):
@@ -63,6 +95,7 @@ class FollowupRequest(BaseModel):
 
 # --- MongoDB (opcional) ---
 _MONGO_OK = False
+_MONGO_CLIENT = None
 try:
     from pymongo import MongoClient
     _MONGO_OK = True
@@ -70,24 +103,50 @@ except Exception:
     _MONGO_OK = False
 
 
-def _get_mongo_collection():
-    """Devuelve la colección de Mongo si MONGODB_URI está definido y pymongo está disponible; si no, None."""
+def _get_mongo_client():
+    """Devuelve el cliente de Mongo si está disponible; si no, None."""
+    global _MONGO_CLIENT
     if not _MONGO_OK:
         return None
+    if _MONGO_CLIENT is not None:
+        return _MONGO_CLIENT
     uri = os.getenv("MONGODB_URI")
     if not uri:
         return None
-    db_name = os.getenv("MONGODB_DB", "ai_dreams")
-    coll_name = os.getenv("MONGODB_COLLECTION", "sessions")
     try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=3000)
-        db = client[db_name]
-        return db[coll_name]
+        _MONGO_CLIENT = MongoClient(uri, serverSelectionTimeoutMS=3000)
+        return _MONGO_CLIENT
     except Exception:
         return None
 
 
-def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, interpretacion: str, ruta_salida: Optional[str]):
+def _get_mongo_db():
+    """Devuelve la base de datos de Mongo."""
+    client = _get_mongo_client()
+    if client is None:
+        return None
+    db_name = os.getenv("MONGODB_DB", "ai_dreams")
+    return client[db_name]
+
+
+def _get_mongo_collection():
+    """Devuelve la colección de sesiones."""
+    db = _get_mongo_db()
+    if db is None:
+        return None
+    coll_name = os.getenv("MONGODB_COLLECTION", "sessions")
+    return db[coll_name]
+
+
+def _get_users_collection():
+    """Devuelve la colección de usuarios."""
+    db = _get_mongo_db()
+    if db is None:
+        return None
+    return db.get_collection("users")
+
+
+def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, interpretacion: str, ruta_salida: Optional[str], user_id: Optional[str] = None):
     col = _get_mongo_collection()
     if col is None:
         return None
@@ -101,6 +160,7 @@ def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, inte
         resumen_interpretacion = None
     doc = {
         "id": ses_id,
+        "user_id": user_id,
         "created_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
         "archivo": ruta_sueno,
         "output_file": ruta_salida,
@@ -117,23 +177,29 @@ def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, inte
         return None
 
 
-def _mongo_get_session(sesion_id: str):
+def _mongo_get_session(sesion_id: str, user_id: Optional[str] = None):
     col = _get_mongo_collection()
     if col is None:
         return None
     try:
-        doc = col.find_one({"id": sesion_id}, {"_id": 0})
+        query = {"id": sesion_id}
+        if user_id:
+            query["user_id"] = user_id
+        doc = col.find_one(query, {"_id": 0})
         return doc
     except Exception:
         return None
 
 
-def _mongo_list_sessions(limit: int = 5):
+def _mongo_list_sessions(limit: int = 5, user_id: Optional[str] = None):
     col = _get_mongo_collection()
     if col is None:
         return None
     try:
-        cur = col.find({}, {"_id": 0, "id": 1, "created_at": 1, "archivo": 1, "interpretacion_resumen": 1, "output_file": 1}).sort("created_at", -1).limit(max(1, limit))
+        query = {}
+        if user_id:
+            query["user_id"] = user_id
+        cur = col.find(query, {"_id": 0, "id": 1, "created_at": 1, "archivo": 1, "interpretacion_resumen": 1, "output_file": 1}).sort("created_at", -1).limit(max(1, limit))
         return list(cur)
     except Exception:
         return None
@@ -159,6 +225,120 @@ def _mongo_add_followup(sesion_id: str, pregunta: str, respuesta: str):
         return False
 
 
+# --- Auth Functions ---
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
+    """Extrae y valida el JWT del header Authorization."""
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido")
+        return {"user_id": user_id, "email": payload.get("email")}
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido o expirado")
+
+
+def _create_user_mongo(email: str, hashed_password: str, nombre: Optional[str] = None) -> Optional[str]:
+    """Crea un usuario en Mongo y devuelve su ID."""
+    col = _get_users_collection()
+    if col is None:
+        return None
+    user_id = str(uuid4())
+    doc = {
+        "id": user_id,
+        "email": email,
+        "hashed_password": hashed_password,
+        "nombre": nombre,
+        "created_at": datetime.utcnow().isoformat(timespec="seconds"),
+    }
+    try:
+        # Verificar si el email ya existe
+        existing = col.find_one({"email": email})
+        if existing:
+            return None
+        col.insert_one(doc)
+        return user_id
+    except Exception:
+        return None
+
+
+def _get_user_by_email_mongo(email: str) -> Optional[Dict[str, Any]]:
+    """Busca un usuario por email en Mongo."""
+    col = _get_users_collection()
+    if col is None:
+        return None
+    try:
+        doc = col.find_one({"email": email}, {"_id": 0})
+        return doc
+    except Exception:
+        return None
+
+
+# --- Auth Endpoints ---
+@app.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
+def register(user: UserCreate) -> Dict[str, Any]:
+    """Registra un nuevo usuario y devuelve un JWT."""
+    if _get_users_collection() is None:
+        raise HTTPException(status_code=503, detail="MongoDB no está disponible. Configura MONGODB_URI.")
+    
+    hashed_password = get_password_hash(user.password)
+    user_id = _create_user_mongo(user.email, hashed_password, user.nombre)
+    
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="El email ya está registrado o hubo un error.")
+    
+    access_token = create_access_token(data={"sub": user_id, "email": user.email})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/login", response_model=Token)
+def login(credentials: UserLogin) -> Dict[str, Any]:
+    """Inicia sesión y devuelve un JWT."""
+    if _get_users_collection() is None:
+        raise HTTPException(status_code=503, detail="MongoDB no está disponible. Configura MONGODB_URI.")
+    
+    user_doc = _get_user_by_email_mongo(credentials.email)
+    if user_doc is None or not verify_password(credentials.password, user_doc.get("hashed_password", "")):
+        raise HTTPException(status_code=401, detail="Email o contraseña incorrectos")
+    
+    access_token = create_access_token(data={"sub": user_doc["id"], "email": user_doc["email"]})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.get("/me", response_model=UserResponse)
+def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Devuelve la información del usuario actual."""
+    user_doc = _get_user_by_email_mongo(current_user["email"])
+    if user_doc is None:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return {
+        "id": user_doc["id"],
+        "email": user_doc["email"],
+        "nombre": user_doc.get("nombre"),
+        "created_at": user_doc.get("created_at", ""),
+    }
+
+
 @app.get("/health")
 def health() -> Dict[str, Any]:
     try:
@@ -170,10 +350,12 @@ def health() -> Dict[str, Any]:
 
 
 @app.post("/interpret-text")
-def interpret_text(req: InterpretTextRequest) -> Dict[str, Any]:
+def interpret_text(req: InterpretTextRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     texto = (req.texto_sueno or "").strip()
     if not texto:
         raise HTTPException(status_code=400, detail="texto_sueno requerido")
+
+    user_id = current_user["user_id"]
 
     # Modo offline forzado si se solicita o por env
     if bool(req.offline) or os.getenv("FORCE_OFFLINE", "0") == "1":
@@ -188,7 +370,7 @@ def interpret_text(req: InterpretTextRequest) -> Dict[str, Any]:
                 ruta_salida = None
         sesion_id = None
         if _get_mongo_collection() is not None:
-            sesion_id = _mongo_create_session(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida)
+            sesion_id = _mongo_create_session(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida, user_id)
         if not sesion_id:
             try:
                 sesion_id = _crear_sesion(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida)
@@ -269,7 +451,7 @@ def interpret_text(req: InterpretTextRequest) -> Dict[str, Any]:
     # Guardado de sesión: preferir Mongo si está disponible; si no, memoria JSON original
     sesion_id = None
     if _get_mongo_collection() is not None:
-        sesion_id = _mongo_create_session(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida)
+        sesion_id = _mongo_create_session(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida, user_id)
     if not sesion_id:
         try:
             sesion_id = _crear_sesion(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida)
@@ -284,10 +466,11 @@ def interpret_text(req: InterpretTextRequest) -> Dict[str, Any]:
 
 
 @app.post("/interpret-file")
-def interpret_file(req: InterpretFileRequest) -> Dict[str, Any]:
+def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     if not (req.ruta or "").strip():
         raise HTTPException(status_code=400, detail="ruta requerida")
 
+    user_id = current_user["user_id"]
     ruta_salida, interpretacion, sesion_id = interpretar_y_guardar(req.ruta, req.contexto_emocional or "")
     if not (interpretacion or "").strip():
         raise HTTPException(status_code=502, detail="No se pudo generar la interpretación. Revisa tu API key/red.")
@@ -302,7 +485,7 @@ def interpret_file(req: InterpretFileRequest) -> Dict[str, Any]:
                 texto_sueno = leer_sueno(req.ruta) or ""
             except Exception:
                 texto_sueno = ""
-            mongo_id = _mongo_create_session(req.ruta, texto_sueno, req.contexto_emocional or "", interpretacion, ruta_salida)
+            mongo_id = _mongo_create_session(req.ruta, texto_sueno, req.contexto_emocional or "", interpretacion, ruta_salida, user_id)
             if mongo_id:
                 sesion_id = mongo_id
         except Exception:
@@ -315,36 +498,45 @@ def interpret_file(req: InterpretFileRequest) -> Dict[str, Any]:
 
 
 @app.get("/sessions")
-def list_sessions(limit: int = 5) -> Dict[str, Any]:
+def list_sessions(limit: int = 5, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     try:
         n = max(1, min(50, int(limit)))
     except Exception:
         n = 5
+    user_id = current_user["user_id"]
     # Preferir Mongo si está configurado
-    docs = _mongo_list_sessions(n)
+    docs = _mongo_list_sessions(n, user_id)
     if docs is not None:
         return {"sessions": docs}
     return {"sessions": _resumen_ultimas_sesiones(n)}
 
 
 @app.get("/sessions/{sesion_id}")
-def get_session(sesion_id: str) -> Dict[str, Any]:
+def get_session(sesion_id: str, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    user_id = current_user["user_id"]
     # Preferir Mongo si está configurado
-    s = _mongo_get_session(sesion_id) if _get_mongo_collection() is not None else None
+    s = _mongo_get_session(sesion_id, user_id) if _get_mongo_collection() is not None else None
     if not s:
         s = _buscar_sesion(sesion_id)
     if not s:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    # Verificar que la sesión pertenezca al usuario (si tiene user_id)
+    if s.get("user_id") and s.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="No tienes permiso para acceder a esta sesión")
     return s
 
 
 @app.post("/sessions/{sesion_id}/followup")
-def followup(sesion_id: str, req: FollowupRequest) -> Dict[str, Any]:
-    s = _mongo_get_session(sesion_id) if _get_mongo_collection() is not None else None
+def followup(sesion_id: str, req: FollowupRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    user_id = current_user["user_id"]
+    s = _mongo_get_session(sesion_id, user_id) if _get_mongo_collection() is not None else None
     if not s:
         s = _buscar_sesion(sesion_id)
     if not s:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    # Verificar que la sesión pertenezca al usuario (si tiene user_id)
+    if s.get("user_id") and s.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="No tienes permiso para acceder a esta sesión")
     pregunta = (req.pregunta or "").strip()
     if not pregunta:
         raise HTTPException(status_code=400, detail="pregunta requerida")

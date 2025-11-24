@@ -136,20 +136,55 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
 ### Endpoints
 
+#### Endpoints Públicos
+
 - `GET /health`: Estado básico del servicio y disponibilidad del LLM.
 
+#### Autenticación
+
+**Importante:** La API ahora requiere autenticación para los endpoints de interpretación y gestión de sesiones. Cada usuario tiene su propio historial privado de sueños.
+
+- `POST /register`
+  - Body JSON:
+    - `email` (string, requerido): email del usuario
+    - `password` (string, requerido, mínimo 6 caracteres): contraseña
+    - `nombre` (string, opcional): nombre del usuario
+  - Respuesta JSON:
+    - `access_token` (string): JWT token
+    - `token_type` (string): "bearer"
+  - Nota: Requiere MongoDB configurado.
+
+- `POST /login`
+  - Body JSON:
+    - `email` (string, requerido): email del usuario
+    - `password` (string, requerido): contraseña
+  - Respuesta JSON:
+    - `access_token` (string): JWT token
+    - `token_type` (string): "bearer"
+
+- `GET /me`
+  - Headers: `Authorization: Bearer {token}`
+  - Respuesta JSON: información del usuario actual (`id`, `email`, `nombre`, `created_at`)
+
+#### Endpoints Protegidos (requieren autenticación)
+
+Para usar estos endpoints, incluye el header: `Authorization: Bearer {tu_token}`
+
 - `POST /interpret-text`
+  - Headers: `Authorization: Bearer {token}`
   - Body JSON:
     - `texto_sueno` (string, requerido): descripción del sueño.
     - `contexto_emocional` (string, opcional): contexto emocional.
     - `save` (bool, opcional, por defecto false): si true, guarda la interpretación en archivo.
     - `filename` (string, opcional): nombre base del archivo para el guardado (si `save=true`).
+    - `offline` (bool, opcional): forzar modo offline sin LLM.
   - Respuesta JSON:
     - `interpretacion` (string): interpretación completa.
     - `ruta_salida` (string|null): ruta del archivo guardado si aplica.
     - `sesion_id` (string|null): id de sesión persistida.
 
 - `POST /interpret-file`
+  - Headers: `Authorization: Bearer {token}`
   - Body JSON:
     - `ruta` (string, requerido): ruta del archivo del sueño (UTF-8).
     - `contexto_emocional` (string, opcional): contexto emocional.
@@ -159,21 +194,54 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
     - `sesion_id` (string|null)
 
 - `GET /sessions?limit=5`
-  - Devuelve un resumen de las últimas sesiones guardadas (`id`, `created_at`, `archivo`, extracto de `interpretacion_resumen`, `output_file`).
+  - Headers: `Authorization: Bearer {token}`
+  - Devuelve un resumen de tus últimas sesiones guardadas (solo las del usuario actual).
 
 - `GET /sessions/{sesion_id}`
-  - Devuelve el contenido completo de la sesión (incluye follow-ups).
+  - Headers: `Authorization: Bearer {token}`
+  - Devuelve el contenido completo de tu sesión (verifica que sea tuya).
 
 - `POST /sessions/{sesion_id}/followup`
+  - Headers: `Authorization: Bearer {token}`
   - Body JSON:
     - `pregunta` (string, requerido): pregunta de seguimiento.
   - Respuesta JSON:
     - `respuesta` (string): respuesta breve del analista onírico.
 
+### Ejemplo de uso con autenticación
+
+```powershell
+# 1. Registrarse
+$body = @{ email = "tu@email.com"; password = "tupassword123"; nombre = "Tu Nombre" } | ConvertTo-Json
+$resp = Invoke-RestMethod -Uri http://127.0.0.1:8000/register -Method POST -Body $body -ContentType "application/json"
+$token = $resp.access_token
+
+# 2. O iniciar sesión si ya tienes cuenta
+$body = @{ email = "tu@email.com"; password = "tupassword123" } | ConvertTo-Json
+$resp = Invoke-RestMethod -Uri http://127.0.0.1:8000/login -Method POST -Body $body -ContentType "application/json"
+$token = $resp.access_token
+
+# 3. Usar el token para interpretar un sueño
+$headers = @{ Authorization = "Bearer $token" }
+$body = @{ texto_sueno = "Soñé que volaba sobre el mar" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8000/interpret-text -Method POST -Body $body -ContentType "application/json" -Headers $headers
+
+# 4. Ver tus sesiones
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/sessions?limit=5" -Method GET -Headers $headers
+```
+
 ### Notas
 
-- La API reusa la memoria persistente `memoria_agente.json` para mantener sesiones y follow-ups.
+- **Autenticación obligatoria**: Todos los endpoints de interpretación y sesiones requieren un token JWT válido.
+- Cada usuario solo puede ver y acceder a sus propias sesiones (aislamiento por `user_id`).
+- MongoDB es **requerido** para autenticación. Configura `MONGODB_URI` en tu `.env`.
+- La API reusa la memoria persistente `memoria_agente.json` para mantener sesiones locales (fallback si Mongo no está disponible).
 - Si el LLM no está disponible, `POST /interpret-text` usa un fallback offline para no retornar vacío.
+
+### Variables de entorno adicionales para autenticación
+
+- `SECRET_KEY` (requerido en producción): clave secreta para firmar JWT tokens. Por defecto usa una clave de desarrollo insegura.
+- `ACCESS_TOKEN_EXPIRE_MINUTES` (opcional, por defecto 10080 = 7 días): tiempo de expiración del token en minutos.
 
 ### MongoDB Atlas (opcional)
 
