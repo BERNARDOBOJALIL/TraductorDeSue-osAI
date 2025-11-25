@@ -228,6 +228,56 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/interpret-text -Method POST -Body $
 
 # 4. Ver tus sesiones
 Invoke-RestMethod -Uri "http://127.0.0.1:8000/sessions?limit=5" -Method GET -Headers $headers
+
+# 5. Generar imagen del sueño
+$body = @{ 
+    descripcion_sueno = "Volaba sobre el mar viendo delfines"
+    estilo = "surrealista y onírico"
+    size = "1024x1024"
+} | ConvertTo-Json
+$imgResp = Invoke-RestMethod -Uri http://127.0.0.1:8000/generate-image -Method POST -Body $body -ContentType "application/json" -Headers $headers
+# La URL de la imagen estará en $imgResp.image_url
+```
+
+### Generación de Imágenes
+
+La API ahora incluye generación de imágenes de sueños usando DALL-E 3 de OpenAI.
+
+#### Configuración
+
+Añade tu API key de OpenAI en `.env`:
+```env
+OPENAI_API_KEY=sk-proj-tu-clave-aqui
+```
+
+Obtén tu clave en: https://platform.openai.com/api-keys
+
+#### Endpoint de generación de imágenes
+
+- `POST /generate-image`
+  - Headers: `Authorization: Bearer {token}`
+  - Body JSON:
+    - `descripcion_sueno` (string, requerido): descripción del sueño a visualizar
+    - `estilo` (string, opcional, default "surrealista y onírico"): estilo artístico
+    - `size` (string, opcional, default "1024x1024"): tamaño (1024x1024, 1792x1024, 1024x1792)
+    - `sesion_id` (string, opcional): vincular imagen con una sesión existente
+  - Respuesta JSON:
+    - `image_url` (string): URL de la imagen generada (válida ~1 hora)
+    - `descripcion` (string): descripción usada
+    - `estilo` (string): estilo aplicado
+    - `size` (string): tamaño generado
+
+**Ejemplo en Postman:**
+```json
+{
+  "descripcion_sueno": "Caminaba por un bosque oscuro iluminado por luciérnagas",
+  "estilo": "fantasía digital, colores vibrantes",
+  "size": "1024x1024",
+  "sesion_id": "uuid-de-tu-sesion"
+}
+```
+
+**Nota:** Las URLs de DALL-E expiran después de ~1 hora. Descarga la imagen si necesitas conservarla.
 ```
 
 ### Notas

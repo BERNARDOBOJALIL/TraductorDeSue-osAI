@@ -93,6 +93,14 @@ class FollowupRequest(BaseModel):
     pregunta: str = Field(..., description="Pregunta de seguimiento")
 
 
+class GenerateImageRequest(BaseModel):
+    descripcion_sueno: str = Field(..., description="Descripción del sueño para generar la imagen")
+    estilo: Optional[str] = Field("surrealista y onírico", description="Estilo artístico de la imagen")
+    size: Optional[str] = Field("1024x1024", description="Tamaño de la imagen: 1024x1024, 1792x1024, 1024x1792")
+    sesion_id: Optional[str] = Field(None, description="ID de sesión para vincular la imagen")
+
+
+
 # --- MongoDB (opcional) ---
 _MONGO_OK = False
 _MONGO_CLIENT = None
@@ -336,6 +344,74 @@ def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str
         "email": user_doc["email"],
         "nombre": user_doc.get("nombre"),
         "created_at": user_doc.get("created_at", ""),
+    }
+
+
+# --- Image Generation ---
+def _generate_dream_image(descripcion: str, estilo: str = "surrealista y onírico", size: str = "1024x1024") -> Optional[str]:
+    """Genera una imagen usando DALL-E 3 de OpenAI."""
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        return None
+    
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=openai_key)
+        
+        # Construir prompt mejorado
+        prompt = f"Ilustración de un sueño con estilo {estilo}: {descripcion}. Arte conceptual, atmósfera onírica, colores vibrantes."
+        
+        # Limitar prompt a 4000 caracteres (límite de DALL-E)
+        if len(prompt) > 4000:
+            prompt = prompt[:3997] + "..."
+        
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size=size,
+            quality="standard",
+            n=1,
+        )
+        
+        return response.data[0].url
+    except Exception as e:
+        print(f"Error generando imagen: {e}")
+        return None
+
+
+@app.post("/generate-image")
+def generate_image(req: GenerateImageRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Genera una imagen del sueño usando DALL-E."""
+    if not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY no configurada. Añádela a las variables de entorno.")
+    
+    descripcion = (req.descripcion_sueno or "").strip()
+    if not descripcion:
+        raise HTTPException(status_code=400, detail="descripcion_sueno requerida")
+    
+    # Generar imagen
+    image_url = _generate_dream_image(descripcion, req.estilo or "surrealista y onírico", req.size or "1024x1024")
+    
+    if not image_url:
+        raise HTTPException(status_code=502, detail="No se pudo generar la imagen. Revisa tu API key de OpenAI.")
+    
+    # Si hay sesion_id, actualizar la sesión en Mongo con la URL de la imagen
+    if req.sesion_id and _get_mongo_collection() is not None:
+        try:
+            col = _get_mongo_collection()
+            user_id = current_user["user_id"]
+            col.update_one(
+                {"id": req.sesion_id, "user_id": user_id},
+                {"$set": {"image_url": image_url, "image_generated_at": datetime.utcnow().isoformat(timespec="seconds")}}
+            )
+        except Exception:
+            pass
+    
+    return {
+        "image_url": image_url,
+        "descripcion": descripcion,
+        "estilo": req.estilo,
+        "size": req.size,
     }
 
 
