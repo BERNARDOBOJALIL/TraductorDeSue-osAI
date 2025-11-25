@@ -356,6 +356,8 @@ def _generate_dream_image(descripcion: str, estilo: str = "surrealista y oníric
     
     try:
         from openai import OpenAI
+        
+        # Crear cliente sin parámetros adicionales para compatibilidad
         client = OpenAI(api_key=openai_key)
         
         # Construir prompt mejorado
@@ -370,7 +372,7 @@ def _generate_dream_image(descripcion: str, estilo: str = "surrealista y oníric
             prompt=prompt,
             size=size,
             quality="standard",
-            n=1,
+            n=1
         )
         
         return response.data[0].url, None
