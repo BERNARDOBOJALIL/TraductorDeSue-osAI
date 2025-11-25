@@ -348,44 +348,46 @@ def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str
 
 
 # --- Image Generation ---
-# --- Image Generation ---
 def _generate_dream_image(descripcion: str, estilo: str = "surrealista y onírico", size: str = "1024x1024") -> tuple[Optional[str], Optional[str]]:
-    """Genera una imagen usando DALL-E 3 de OpenAI vía HTTP. Retorna (url, error_msg)."""
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if not openai_key:
-        return None, "OPENAI_API_KEY no configurada"
+    """Genera una imagen usando Imagen 3 de Google (Gemini). Retorna (url, error_msg)."""
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_key:
+        return None, "GEMINI_API_KEY no configurada"
     
     try:
-        import requests
-        import json
-
+        import google.generativeai as genai
+        import base64
+        from io import BytesIO
+        
+        genai.configure(api_key=gemini_key)
+        
         # Construir prompt mejorado
         prompt = f"Ilustración de un sueño con estilo {estilo}: {descripcion}. Arte conceptual, atmósfera onírica, colores vibrantes."
-
+        
         if len(prompt) > 4000:
             prompt = prompt[:3997] + "..."
-
-        url = "https://api.openai.com/v1/images/generations"
-        headers = {
-            "Authorization": f"Bearer {openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": "dall-e-3",
-            "prompt": prompt,
-            "n": 1,
-            "size": size,
-            "quality": "standard",
-        }
-
-        resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
-        if resp.status_code != 200:
-            return None, f"OpenAI HTTP {resp.status_code}: {resp.text}"
-
-        data = resp.json()
-        image_url = data["data"][0]["url"]
+        
+        # Usar el modelo Imagen 3
+        model = genai.ImageGenerationModel("imagen-3.0-generate-001")
+        
+        response = model.generate_images(
+            prompt=prompt,
+            number_of_images=1,
+            aspect_ratio="1:1",  # Similar a 1024x1024
+        )
+        
+        if not response.images:
+            return None, "No se generó ninguna imagen"
+        
+        # La imagen viene como objeto PIL, la convertimos a base64 data URL
+        image = response.images[0]._pil_image
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode()
+        image_url = f"data:image/png;base64,{img_base64}"
+        
         return image_url, None
-
+        
     except Exception as e:
         error_msg = str(e)
         print(f"Error generando imagen: {error_msg}")
