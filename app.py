@@ -348,11 +348,11 @@ def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str
 
 
 # --- Image Generation ---
-def _generate_dream_image(descripcion: str, estilo: str = "surrealista y onírico", size: str = "1024x1024") -> Optional[str]:
-    """Genera una imagen usando DALL-E 3 de OpenAI."""
+def _generate_dream_image(descripcion: str, estilo: str = "surrealista y onírico", size: str = "1024x1024") -> tuple[Optional[str], Optional[str]]:
+    """Genera una imagen usando DALL-E 3 de OpenAI. Retorna (url, error_msg)."""
     openai_key = os.getenv("OPENAI_API_KEY")
     if not openai_key:
-        return None
+        return None, "OPENAI_API_KEY no configurada"
     
     try:
         from openai import OpenAI
@@ -373,10 +373,11 @@ def _generate_dream_image(descripcion: str, estilo: str = "surrealista y oníric
             n=1,
         )
         
-        return response.data[0].url
+        return response.data[0].url, None
     except Exception as e:
-        print(f"Error generando imagen: {e}")
-        return None
+        error_msg = str(e)
+        print(f"Error generando imagen: {error_msg}")
+        return None, error_msg
 
 
 @app.post("/generate-image")
@@ -390,10 +391,11 @@ def generate_image(req: GenerateImageRequest, current_user: Dict[str, Any] = Dep
         raise HTTPException(status_code=400, detail="descripcion_sueno requerida")
     
     # Generar imagen
-    image_url = _generate_dream_image(descripcion, req.estilo or "surrealista y onírico", req.size or "1024x1024")
+    image_url, error_msg = _generate_dream_image(descripcion, req.estilo or "surrealista y onírico", req.size or "1024x1024")
     
     if not image_url:
-        raise HTTPException(status_code=502, detail="No se pudo generar la imagen. Revisa tu API key de OpenAI.")
+        detail_msg = f"No se pudo generar la imagen: {error_msg}" if error_msg else "No se pudo generar la imagen. Revisa tu API key de OpenAI."
+        raise HTTPException(status_code=502, detail=detail_msg)
     
     # Si hay sesion_id, actualizar la sesión en Mongo con la URL de la imagen
     if req.sesion_id and _get_mongo_collection() is not None:
