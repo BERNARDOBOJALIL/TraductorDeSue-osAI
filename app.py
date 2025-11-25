@@ -348,34 +348,44 @@ def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str
 
 
 # --- Image Generation ---
+# --- Image Generation ---
 def _generate_dream_image(descripcion: str, estilo: str = "surrealista y onírico", size: str = "1024x1024") -> tuple[Optional[str], Optional[str]]:
-    """Genera una imagen usando DALL-E 3 de OpenAI. Retorna (url, error_msg)."""
+    """Genera una imagen usando DALL-E 3 de OpenAI vía HTTP. Retorna (url, error_msg)."""
     openai_key = os.getenv("OPENAI_API_KEY")
     if not openai_key:
         return None, "OPENAI_API_KEY no configurada"
     
     try:
-        from openai import OpenAI
-        
-        # Crear cliente sin parámetros adicionales para compatibilidad
-        client = OpenAI(api_key=openai_key)
-        
+        import requests
+        import json
+
         # Construir prompt mejorado
         prompt = f"Ilustración de un sueño con estilo {estilo}: {descripcion}. Arte conceptual, atmósfera onírica, colores vibrantes."
-        
-        # Limitar prompt a 4000 caracteres (límite de DALL-E)
+
         if len(prompt) > 4000:
             prompt = prompt[:3997] + "..."
-        
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            size=size,
-            quality="standard",
-            n=1
-        )
-        
-        return response.data[0].url, None
+
+        url = "https://api.openai.com/v1/images/generations"
+        headers = {
+            "Authorization": f"Bearer {openai_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "dall-e-3",
+            "prompt": prompt,
+            "n": 1,
+            "size": size,
+            "quality": "standard",
+        }
+
+        resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
+        if resp.status_code != 200:
+            return None, f"OpenAI HTTP {resp.status_code}: {resp.text}"
+
+        data = resp.json()
+        image_url = data["data"][0]["url"]
+        return image_url, None
+
     except Exception as e:
         error_msg = str(e)
         print(f"Error generando imagen: {error_msg}")
