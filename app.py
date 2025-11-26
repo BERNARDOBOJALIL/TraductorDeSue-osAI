@@ -349,49 +349,46 @@ def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str
 
 # --- Image Generation ---
 def _generate_dream_image(descripcion: str, estilo: str = "surrealista y onírico", size: str = "1024x1024") -> tuple[Optional[str], Optional[str]]:
-    """Genera una imagen usando Stable Diffusion vía Hugging Face API. Retorna (data_url, error_msg)."""
-    # Usar Hugging Face API (gratuita con rate limits)
+    """Genera una imagen usando Hugging Face Inference Client. Retorna (data_url, error_msg)."""
     hf_token = os.getenv("HUGGINGFACE_TOKEN")
     if not hf_token:
         return None, "HUGGINGFACE_TOKEN no configurada. Obtén una gratis en https://huggingface.co/settings/tokens"
 
     try:
-        import requests
+        from huggingface_hub import InferenceClient
         import base64
+        from io import BytesIO
 
-        # Construir prompt en inglés (Stable Diffusion funciona mejor en inglés)
+        # Construir prompt en inglés (funciona mejor)
         prompt = f"Dream illustration with {estilo} style: {descripcion}. Concept art, dreamlike atmosphere, vibrant colors, high quality, detailed"
 
         if len(prompt) > 1000:
             prompt = prompt[:997] + "..."
 
-        # API de Hugging Face usando router.huggingface.co
-        url = "https://router.huggingface.co/runwayml/stable-diffusion-v1-5"
-        headers = {
-            "Authorization": f"Bearer {hf_token}",
-            "Content-Type": "application/json"
-        }
-        payload = {"inputs": prompt}
+        # Usar el cliente oficial de Hugging Face
+        client = InferenceClient(
+            provider="fal-ai",
+            api_key=hf_token,
+        )
 
-        resp = requests.post(url, headers=headers, json=payload, timeout=120)
-        
-        if not resp.ok:
-            # Si el modelo está cargando, informar
-            if resp.status_code == 503:
-                try:
-                    err = resp.json()
-                    if "loading" in err.get("error", "").lower():
-                        return None, "El modelo está cargando. Intenta de nuevo en ~30 segundos."
-                except:
-                    pass
-            return None, f"Hugging Face API {resp.status_code}: {resp.text[:200]}"
+        # text_to_image devuelve un objeto PIL.Image
+        image = client.text_to_image(
+            prompt,
+            model="stabilityai/stable-diffusion-2-1",
+        )
 
-        # La respuesta es la imagen en bytes
-        image_bytes = resp.content
-        img_b64 = base64.b64encode(image_bytes).decode()
-        image_url = f"data:image/jpeg;base64,{img_b64}"
+        # Convertir PIL Image a base64
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        img_b64 = base64.b64encode(buffered.getvalue()).decode()
+        image_url = f"data:image/png;base64,{img_b64}"
         
         return image_url, None
+
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error generando imagen: {error_msg}")
+        return None, error_msg
 
     except Exception as e:
         error_msg = str(e)
