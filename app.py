@@ -349,45 +349,65 @@ def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str
 
 # --- Image Generation ---
 def _generate_dream_image(descripcion: str, estilo: str = "surrealista y onírico", size: str = "1024x1024") -> tuple[Optional[str], Optional[str]]:
-    """Genera una imagen usando Imagen 3 de Google (Gemini). Retorna (url, error_msg)."""
+    """Genera una imagen usando Imagen 3 (Gemini) vía REST. Retorna (data_url, error_msg)."""
     gemini_key = os.getenv("GEMINI_API_KEY")
     if not gemini_key:
         return None, "GEMINI_API_KEY no configurada"
-    
+
     try:
-        import google.generativeai as genai
-        import base64
-        from io import BytesIO
-        
-        genai.configure(api_key=gemini_key)
-        
+        import requests
+        import json
+
         # Construir prompt mejorado
         prompt = f"Ilustración de un sueño con estilo {estilo}: {descripcion}. Arte conceptual, atmósfera onírica, colores vibrantes."
-        
+
         if len(prompt) > 4000:
             prompt = prompt[:3997] + "..."
-        
-        # Usar el modelo Imagen 3
-        model = genai.ImageGenerationModel("imagen-3.0-generate-001")
-        
-        response = model.generate_images(
-            prompt=prompt,
-            number_of_images=1,
-            aspect_ratio="1:1",  # Similar a 1024x1024
-        )
-        
-        if not response.images:
-            return None, "No se generó ninguna imagen"
-        
-        # La imagen viene como objeto PIL, la convertimos a base64 data URL
-        image = response.images[0]._pil_image
-        buffered = BytesIO()
-        image.save(buffered, format="PNG")
-        img_base64 = base64.b64encode(buffered.getvalue()).decode()
-        image_url = f"data:image/png;base64,{img_base64}"
-        
+
+        # Endpoint REST de Imagen 3 (Google AI Studio - v1beta)
+        # Pasamos la API key por query string, como requiere el servicio
+        url = "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:generateImages"
+        params = {"key": gemini_key}
+        headers = {"Content-Type": "application/json"}
+
+        # Ajustar aspect ratio según size (soporte simple 1:1, 16:9, 9:16)
+        aspect_ratio = "1:1"
+        if size in ("1792x1024", "16:9"):
+            aspect_ratio = "16:9"
+        elif size in ("1024x1792", "9:16"):
+            aspect_ratio = "9:16"
+
+        payload = {
+            "prompt": {"text": prompt},
+            "numberOfImages": 1,
+            "aspectRatio": aspect_ratio,
+        }
+
+        resp = requests.post(url, params=params, headers=headers, data=json.dumps(payload), timeout=90)
+        if not resp.ok:
+            return None, f"Gemini HTTP {resp.status_code}: {resp.text}"
+
+        data = resp.json()
+
+        # Intentar extraer base64 de varias formas comunes
+        img_b64 = None
+        try:
+            img_b64 = data["images"][0]["content"].get("base64Data") or data["images"][0]["content"].get("data")
+        except Exception:
+            pass
+        if not img_b64:
+            # Intento alterno
+            try:
+                img_b64 = data["images"][0].get("data")
+            except Exception:
+                pass
+
+        if not img_b64:
+            return None, f"Formato de respuesta inesperado: {list(data.keys())}"
+
+        image_url = f"data:image/png;base64,{img_b64}"
         return image_url, None
-        
+
     except Exception as e:
         error_msg = str(e)
         print(f"Error generando imagen: {error_msg}")
@@ -396,9 +416,9 @@ def _generate_dream_image(descripcion: str, estilo: str = "surrealista y oníric
 
 @app.post("/generate-image")
 def generate_image(req: GenerateImageRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-    """Genera una imagen del sueño usando DALL-E."""
-    if not os.getenv("OPENAI_API_KEY"):
-        raise HTTPException(status_code=503, detail="OPENAI_API_KEY no configurada. Añádela a las variables de entorno.")
+    """Genera una imagen del sueño usando Imagen 3 (Gemini)."""
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(status_code=503, detail="GEMINI_API_KEY no configurada. Añádela a las variables de entorno.")
     
     descripcion = (req.descripcion_sueno or "").strip()
     if not descripcion:
