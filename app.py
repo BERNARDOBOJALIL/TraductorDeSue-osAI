@@ -365,13 +365,16 @@ def _generate_dream_image(descripcion: str, estilo: str = "surrealista y oníric
         if len(prompt) > 1000:
             prompt = prompt[:997] + "..."
 
-        # Usar el cliente oficial de Hugging Face
-        client = InferenceClient(token=hf_token)
+        # Usar el cliente oficial de Hugging Face con provider fal-ai
+        client = InferenceClient(
+            provider="fal-ai",
+            api_key=hf_token,
+        )
 
         # text_to_image devuelve un objeto PIL.Image
         image = client.text_to_image(
             prompt,
-            model="stabilityai/stable-diffusion-2-1",
+            model="Qwen/Qwen-Image",
         )
 
         # Convertir PIL Image a base64
