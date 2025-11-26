@@ -349,41 +349,43 @@ def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str
 
 # --- Image Generation ---
 def _generate_dream_image(descripcion: str, estilo: str = "surrealista y onírico", size: str = "1024x1024") -> tuple[Optional[str], Optional[str]]:
-    """Genera una imagen usando Hugging Face Inference Client. Retorna (data_url, error_msg)."""
-    hf_token = os.getenv("HUGGINGFACE_TOKEN")
-    if not hf_token:
-        return None, "HUGGINGFACE_TOKEN no configurada. Obtén una gratis en https://huggingface.co/settings/tokens"
+    """Genera una imagen usando Gemini 2.5 Flash Image. Retorna (data_url, error_msg)."""
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_key:
+        return None, "GEMINI_API_KEY no configurada"
 
     try:
-        from huggingface_hub import InferenceClient
+        from google import genai
         import base64
         from io import BytesIO
 
-        # Construir prompt en inglés (funciona mejor)
-        prompt = f"Dream illustration with {estilo} style: {descripcion}. Concept art, dreamlike atmosphere, vibrant colors, high quality, detailed"
+        # Configurar cliente
+        client = genai.Client(api_key=gemini_key)
 
-        if len(prompt) > 1000:
-            prompt = prompt[:997] + "..."
+        # Construir prompt
+        prompt = f"Create a dream illustration with {estilo} style: {descripcion}. Concept art, dreamlike atmosphere, vibrant colors, high quality, detailed"
 
-        # Usar el cliente oficial de Hugging Face con provider fal-ai
-        client = InferenceClient(
-            provider="fal-ai",
-            api_key=hf_token,
+        if len(prompt) > 2000:
+            prompt = prompt[:1997] + "..."
+
+        # Generar imagen con Gemini 2.5 Flash Image
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-image",
+            contents=[prompt],
         )
 
-        # text_to_image devuelve un objeto PIL.Image
-        image = client.text_to_image(
-            prompt,
-            model="Qwen/Qwen-Image",
-        )
-
-        # Convertir PIL Image a base64
-        buffered = BytesIO()
-        image.save(buffered, format="PNG")
-        img_b64 = base64.b64encode(buffered.getvalue()).decode()
-        image_url = f"data:image/png;base64,{img_b64}"
+        # Extraer la imagen de la respuesta
+        for part in response.parts:
+            if part.inline_data is not None:
+                image = part.as_image()
+                # Convertir PIL Image a base64
+                buffered = BytesIO()
+                image.save(buffered, format="PNG")
+                img_b64 = base64.b64encode(buffered.getvalue()).decode()
+                image_url = f"data:image/png;base64,{img_b64}"
+                return image_url, None
         
-        return image_url, None
+        return None, "No se generó ninguna imagen en la respuesta"
 
     except Exception as e:
         error_msg = str(e)
@@ -403,9 +405,9 @@ def _generate_dream_image(descripcion: str, estilo: str = "surrealista y oníric
 
 @app.post("/generate-image")
 def generate_image(req: GenerateImageRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-    """Genera una imagen del sueño usando Stable Diffusion (Hugging Face)."""
-    if not os.getenv("HUGGINGFACE_TOKEN"):
-        raise HTTPException(status_code=503, detail="HUGGINGFACE_TOKEN no configurada. Obtén una gratis en https://huggingface.co/settings/tokens")
+    """Genera una imagen del sueño usando Gemini 2.5 Flash Image."""
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(status_code=503, detail="GEMINI_API_KEY no configurada. Añádela a las variables de entorno.")
     
     descripcion = (req.descripcion_sueno or "").strip()
     if not descripcion:

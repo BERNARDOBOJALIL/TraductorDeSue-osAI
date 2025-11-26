@@ -241,20 +241,16 @@ $imgResp = Invoke-RestMethod -Uri http://127.0.0.1:8000/generate-image -Method P
 
 ### Generación de Imágenes
 
-La API ahora incluye generación de imágenes de sueños usando **Stable Diffusion XL** a través de Hugging Face (gratuito).
+La API ahora incluye generación de imágenes de sueños usando **Gemini 2.5 Flash Image** de Google.
 
 #### Configuración
 
-Necesitas un token de Hugging Face (gratuito) en tu `.env`:
+Usa la misma API key de Gemini que ya tienes configurada:
 ```env
-HUGGINGFACE_TOKEN=hf_tu_token_aqui
+GEMINI_API_KEY=tu-clave-aqui
 ```
 
-**Cómo obtener tu token:**
-1. Crea una cuenta gratis en https://huggingface.co
-2. Ve a https://huggingface.co/settings/tokens
-3. Crea un nuevo token (tipo "Read")
-4. Cópialo y añádelo a tu `.env` en Render
+No requiere configuración adicional.
 
 #### Endpoint de generación de imágenes
 
@@ -281,8 +277,7 @@ HUGGINGFACE_TOKEN=hf_tu_token_aqui
 
 **Notas:**
 - Las imágenes se devuelven en formato base64 embebidas en la respuesta (no expiran).
-- La primera llamada puede tardar ~30 segundos (el modelo se carga en memoria).
-- Tier gratuito de Hugging Face: 1000 requests/día.
+- Usa el modelo `gemini-2.5-flash-image` de Google.
 ```
 
 ### Notas
