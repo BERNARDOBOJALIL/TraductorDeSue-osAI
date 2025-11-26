@@ -365,8 +365,8 @@ def _generate_dream_image(descripcion: str, estilo: str = "surrealista y oníric
         if len(prompt) > 1000:
             prompt = prompt[:997] + "..."
 
-        # API de Hugging Face Inference - Stable Diffusion XL
-        url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+        # API de Hugging Face Router - Stable Diffusion XL
+        url = "https://router.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {"Authorization": f"Bearer {hf_token}"}
         payload = {"inputs": prompt}
 
