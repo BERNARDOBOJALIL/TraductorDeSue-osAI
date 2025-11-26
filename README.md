@@ -241,16 +241,20 @@ $imgResp = Invoke-RestMethod -Uri http://127.0.0.1:8000/generate-image -Method P
 
 ### Generación de Imágenes
 
-La API ahora incluye generación de imágenes de sueños usando **Imagen 3** de Google (parte de Gemini).
+La API ahora incluye generación de imágenes de sueños usando **Stable Diffusion XL** a través de Hugging Face (gratuito).
 
 #### Configuración
 
-La generación de imágenes usa la misma API key de Gemini que ya tienes configurada en `.env`:
+Necesitas un token de Hugging Face (gratuito) en tu `.env`:
 ```env
-GEMINI_API_KEY=tu-clave-aqui
+HUGGINGFACE_TOKEN=hf_tu_token_aqui
 ```
 
-No requiere configuración adicional.
+**Cómo obtener tu token:**
+1. Crea una cuenta gratis en https://huggingface.co
+2. Ve a https://huggingface.co/settings/tokens
+3. Crea un nuevo token (tipo "Read")
+4. Cópialo y añádelo a tu `.env` en Render
 
 #### Endpoint de generación de imágenes
 
@@ -259,7 +263,7 @@ No requiere configuración adicional.
   - Body JSON:
     - `descripcion_sueno` (string, requerido): descripción del sueño a visualizar
     - `estilo` (string, opcional, default "surrealista y onírico"): estilo artístico
-    - `size` (string, opcional): tamaño (ignorado por ahora, siempre genera 1:1)
+    - `size` (string, opcional): ignorado por ahora
     - `sesion_id` (string, opcional): vincular imagen con una sesión existente
   - Respuesta JSON:
     - `image_url` (string): imagen en formato base64 data URL (no expira)
@@ -271,12 +275,14 @@ No requiere configuración adicional.
 ```json
 {
   "descripcion_sueno": "Caminaba por un bosque oscuro iluminado por luciérnagas",
-  "estilo": "fantasía digital, colores vibrantes",
-  "sesion_id": "uuid-de-tu-sesion"
+  "estilo": "fantasía digital, colores vibrantes"
 }
 ```
 
-**Nota:** Las imágenes se devuelven en formato base64 embebidas en la respuesta, por lo que no expiran y pueden guardarse directamente.
+**Notas:**
+- Las imágenes se devuelven en formato base64 embebidas en la respuesta (no expiran).
+- La primera llamada puede tardar ~30 segundos (el modelo se carga en memoria).
+- Tier gratuito de Hugging Face: 1000 requests/día.
 ```
 
 ### Notas
