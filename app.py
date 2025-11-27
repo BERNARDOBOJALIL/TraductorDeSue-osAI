@@ -381,12 +381,17 @@ def _generate_dream_image(descripcion: str, estilo: str = "surrealista y oníric
                 if hasattr(candidate, 'content') and candidate.content:
                     for part in candidate.content.parts:
                         if hasattr(part, 'inline_data') and part.inline_data is not None:
-                            image = part.as_image()
-                            # Convertir PIL Image a base64
-                            buffered = BytesIO()
-                            image.save(buffered, format="PNG")
-                            img_b64 = base64.b64encode(buffered.getvalue()).decode()
-                            image_url = f"data:image/png;base64,{img_b64}"
+                            # inline_data contiene mime_type y data (bytes)
+                            image_bytes = part.inline_data.data
+                            img_b64 = base64.b64encode(image_bytes).decode()
+                            
+                            # Determinar el tipo de imagen del mime_type
+                            mime_type = part.inline_data.mime_type or "image/png"
+                            if "jpeg" in mime_type or "jpg" in mime_type:
+                                image_url = f"data:image/jpeg;base64,{img_b64}"
+                            else:
+                                image_url = f"data:image/png;base64,{img_b64}"
+                            
                             return image_url, None
         
         return None, "No se generó ninguna imagen en la respuesta"
