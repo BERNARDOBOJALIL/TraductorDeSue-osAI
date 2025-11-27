@@ -375,15 +375,19 @@ def _generate_dream_image(descripcion: str, estilo: str = "surrealista y oníric
         )
 
         # Extraer la imagen de la respuesta
-        for part in response.parts:
-            if part.inline_data is not None:
-                image = part.as_image()
-                # Convertir PIL Image a base64
-                buffered = BytesIO()
-                image.save(buffered, format="PNG")
-                img_b64 = base64.b64encode(buffered.getvalue()).decode()
-                image_url = f"data:image/png;base64,{img_b64}"
-                return image_url, None
+        # La respuesta contiene candidates con parts
+        if hasattr(response, 'candidates') and response.candidates:
+            for candidate in response.candidates:
+                if hasattr(candidate, 'content') and candidate.content:
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'inline_data') and part.inline_data is not None:
+                            image = part.as_image()
+                            # Convertir PIL Image a base64
+                            buffered = BytesIO()
+                            image.save(buffered, format="PNG")
+                            img_b64 = base64.b64encode(buffered.getvalue()).decode()
+                            image_url = f"data:image/png;base64,{img_b64}"
+                            return image_url, None
         
         return None, "No se generó ninguna imagen en la respuesta"
 
