@@ -157,7 +157,7 @@ def _get_users_collection():
     return db.get_collection("users")
 
 
-def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, interpretacion: str, ruta_salida: Optional[str], user_id: Optional[str] = None):
+def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, interpretacion: str, ruta_salida: Optional[str], user_id: Optional[str] = None, titulo: Optional[str] = None):
     col = _get_mongo_collection()
     if col is None:
         return None
@@ -179,6 +179,7 @@ def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, inte
         "texto_sueno": texto_sueno,
         "interpretacion": interpretacion,
         "interpretacion_resumen": (resumen_interpretacion or "").strip(),
+        "titulo": titulo,
         "followups": [],
     }
     try:
@@ -639,8 +640,25 @@ def interpret_text(req: InterpretTextRequest, current_user: Dict[str, Any] = Dep
 
     # Guardado de sesión: preferir Mongo si está disponible; si no, memoria JSON original
     sesion_id = None
+    titulo_generado = None
+    
+    # Generar título para la sesión
+    try:
+        titulo_generado, _ = _generate_dream_title(texto)
+    except Exception as e:
+        print(f"Error generando título: {e}")
+        titulo_generado = None
+    
     if _get_mongo_collection() is not None:
-        sesion_id = _mongo_create_session(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida, user_id)
+        sesion_id = _mongo_create_session(
+            req.filename or "(API)", 
+            texto, 
+            req.contexto_emocional or "", 
+            interpretacion, 
+            ruta_salida, 
+            user_id,
+            titulo=titulo_generado
+        )
     if not sesion_id:
         try:
             sesion_id = _crear_sesion(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida)
@@ -651,6 +669,7 @@ def interpret_text(req: InterpretTextRequest, current_user: Dict[str, Any] = Dep
         "interpretacion": interpretacion,
         "ruta_salida": ruta_salida,
         "sesion_id": sesion_id,
+        "titulo": titulo_generado,
     }
 
 
@@ -663,6 +682,17 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
     ruta_salida, interpretacion, sesion_id = interpretar_y_guardar(req.ruta, req.contexto_emocional or "")
     if not (interpretacion or "").strip():
         raise HTTPException(status_code=502, detail="No se pudo generar la interpretación. Revisa tu API key/red.")
+    
+    # Generar título
+    titulo_generado = None
+    try:
+        from reporte6_BernardoBojalil import leer_sueno
+        texto_sueno = leer_sueno(req.ruta) or ""
+        titulo_generado, _ = _generate_dream_title(texto_sueno)
+    except Exception as e:
+        print(f"Error generando título: {e}")
+        titulo_generado = None
+    
     # Si Mongo está disponible, reflejar la sesión allí también para unificar fuente de verdad de la API
     if _get_mongo_collection() is not None:
         try:
@@ -674,7 +704,7 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
                 texto_sueno = leer_sueno(req.ruta) or ""
             except Exception:
                 texto_sueno = ""
-            mongo_id = _mongo_create_session(req.ruta, texto_sueno, req.contexto_emocional or "", interpretacion, ruta_salida, user_id)
+            mongo_id = _mongo_create_session(req.ruta, texto_sueno, req.contexto_emocional or "", interpretacion, ruta_salida, user_id, titulo=titulo_generado)
             if mongo_id:
                 sesion_id = mongo_id
         except Exception:
@@ -683,10 +713,11 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
         "interpretacion": interpretacion,
         "ruta_salida": ruta_salida,
         "sesion_id": sesion_id,
+        "titulo": titulo_generado,
     }
 
 
-@app.get("/sessions")
+@app.get("/sessions")@app.get("/sessions")
 def list_sessions(limit: int = 5, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     try:
         n = max(1, min(50, int(limit)))
