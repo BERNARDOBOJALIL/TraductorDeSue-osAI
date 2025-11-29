@@ -212,7 +212,7 @@ def _mongo_list_sessions(limit: int = 5, user_id: Optional[str] = None):
         query = {}
         if user_id:
             query["user_id"] = user_id
-        cur = col.find(query, {"_id": 0, "id": 1, "created_at": 1, "archivo": 1, "interpretacion_resumen": 1, "output_file": 1}).sort("created_at", -1).limit(max(1, limit))
+        cur = col.find(query, {"_id": 0, "id": 1, "created_at": 1, "archivo": 1, "interpretacion_resumen": 1, "output_file": 1, "title": 1, "titulo": 1}).sort("created_at", -1).limit(max(1, limit))
         return list(cur)
     except Exception:
         return None
