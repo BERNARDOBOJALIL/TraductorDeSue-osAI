@@ -157,7 +157,7 @@ def _get_users_collection():
     return db.get_collection("users")
 
 
-def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, interpretacion: str, ruta_salida: Optional[str], user_id: Optional[str] = None, titulo: Optional[str] = None):
+def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, interpretacion: str, ruta_salida: Optional[str], user_id: Optional[str] = None):
     col = _get_mongo_collection()
     if col is None:
         return None
@@ -179,7 +179,6 @@ def _mongo_create_session(ruta_sueno: str, texto_sueno: str, contexto: str, inte
         "texto_sueno": texto_sueno,
         "interpretacion": interpretacion,
         "interpretacion_resumen": (resumen_interpretacion or "").strip(),
-        "titulo": titulo,
         "followups": [],
     }
     try:
@@ -469,34 +468,23 @@ def _generate_dream_title(descripcion: str) -> tuple[Optional[str], Optional[str
         llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             google_api_key=gemini_key,
-            temperature=0.3,
+            temperature=0.7,
         )
         
-        # Prompt para generar título muy corto como portada
-        prompt = f"""Genera un título muy corto (máximo 3-4 palabras) para este sueño.
-El título debe ser como una portada de libro: breve, impactante y descriptivo.
-Responde SOLO con el título, sin comillas, sin explicaciones, sin puntos.
+        # Prompt para generar título corto y descriptivo
+        prompt = f"""Genera un título muy breve y descriptivo (máximo 6 palabras) para este sueño. 
+Solo devuelve el título, sin explicaciones adicionales.
 
-Ejemplos:
-- Vuelo sobre montañas
-- Caída al vacío
-- Encuentro con sombras
-- Mar de estrellas
-
-Descripción del sueño: {descripcion[:400]}
+Sueño: {descripcion[:500]}
 
 Título:"""
         
         response = llm.invoke(prompt)
-        title = response.content.strip().strip('"').strip("'").strip(".")
+        title = response.content.strip().strip('"').strip("'")
         
-        # Asegurar que sea muy corto (máximo 40 caracteres)
-        if len(title) > 40:
-            # Si es muy largo, tomar solo las primeras 3-4 palabras
-            words = title.split()[:4]
-            title = " ".join(words)
-            if len(title) > 40:
-                title = title[:37] + "..."
+        # Limitar a 60 caracteres máximo
+        if len(title) > 60:
+            title = title[:57] + "..."
         
         return title, None
         
@@ -640,25 +628,8 @@ def interpret_text(req: InterpretTextRequest, current_user: Dict[str, Any] = Dep
 
     # Guardado de sesión: preferir Mongo si está disponible; si no, memoria JSON original
     sesion_id = None
-    titulo_generado = None
-    
-    # Generar título para la sesión
-    try:
-        titulo_generado, _ = _generate_dream_title(texto)
-    except Exception as e:
-        print(f"Error generando título: {e}")
-        titulo_generado = None
-    
     if _get_mongo_collection() is not None:
-        sesion_id = _mongo_create_session(
-            req.filename or "(API)", 
-            texto, 
-            req.contexto_emocional or "", 
-            interpretacion, 
-            ruta_salida, 
-            user_id,
-            titulo=titulo_generado
-        )
+        sesion_id = _mongo_create_session(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida, user_id)
     if not sesion_id:
         try:
             sesion_id = _crear_sesion(req.filename or "(API)", texto, req.contexto_emocional or "", interpretacion, ruta_salida)
@@ -669,7 +640,6 @@ def interpret_text(req: InterpretTextRequest, current_user: Dict[str, Any] = Dep
         "interpretacion": interpretacion,
         "ruta_salida": ruta_salida,
         "sesion_id": sesion_id,
-        "titulo": titulo_generado,
     }
 
 
@@ -682,17 +652,6 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
     ruta_salida, interpretacion, sesion_id = interpretar_y_guardar(req.ruta, req.contexto_emocional or "")
     if not (interpretacion or "").strip():
         raise HTTPException(status_code=502, detail="No se pudo generar la interpretación. Revisa tu API key/red.")
-    
-    # Generar título
-    titulo_generado = None
-    try:
-        from reporte6_BernardoBojalil import leer_sueno
-        texto_sueno = leer_sueno(req.ruta) or ""
-        titulo_generado, _ = _generate_dream_title(texto_sueno)
-    except Exception as e:
-        print(f"Error generando título: {e}")
-        titulo_generado = None
-    
     # Si Mongo está disponible, reflejar la sesión allí también para unificar fuente de verdad de la API
     if _get_mongo_collection() is not None:
         try:
@@ -704,7 +663,7 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
                 texto_sueno = leer_sueno(req.ruta) or ""
             except Exception:
                 texto_sueno = ""
-            mongo_id = _mongo_create_session(req.ruta, texto_sueno, req.contexto_emocional or "", interpretacion, ruta_salida, user_id, titulo=titulo_generado)
+            mongo_id = _mongo_create_session(req.ruta, texto_sueno, req.contexto_emocional or "", interpretacion, ruta_salida, user_id)
             if mongo_id:
                 sesion_id = mongo_id
         except Exception:
@@ -713,7 +672,6 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
         "interpretacion": interpretacion,
         "ruta_salida": ruta_salida,
         "sesion_id": sesion_id,
-        "titulo": titulo_generado,
     }
 
 
