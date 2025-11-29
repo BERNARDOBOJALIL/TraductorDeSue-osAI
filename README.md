@@ -182,6 +182,8 @@ Para usar estos endpoints, incluye el header: `Authorization: Bearer {tu_token}`
     - `interpretacion` (string): interpretación completa.
     - `ruta_salida` (string|null): ruta del archivo guardado si aplica.
     - `sesion_id` (string|null): id de sesión persistida.
+    - `title` (string): título generado automáticamente del sueño.
+    - `titulo` (string): título generado automáticamente del sueño (mismo valor).
 
 - `POST /interpret-file`
   - Headers: `Authorization: Bearer {token}`
@@ -192,6 +194,8 @@ Para usar estos endpoints, incluye el header: `Authorization: Bearer {tu_token}`
     - `interpretacion` (string)
     - `ruta_salida` (string|null)
     - `sesion_id` (string|null)
+    - `title` (string): título generado automáticamente del sueño.
+    - `titulo` (string): título generado automáticamente del sueño (mismo valor).
 
 - `GET /sessions?limit=5`
   - Headers: `Authorization: Bearer {token}`
