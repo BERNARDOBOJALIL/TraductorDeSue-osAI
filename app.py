@@ -717,7 +717,7 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
     }
 
 
-@app.get("/sessions")@app.get("/sessions")
+@app.get("/sessions")
 def list_sessions(limit: int = 5, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     try:
         n = max(1, min(50, int(limit)))
