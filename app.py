@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, AliasChoices, EmailStr
 from typing import Optional, List, Dict, Any
 import concurrent.futures
 import os
+import json
 from uuid import uuid4
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
@@ -236,6 +237,56 @@ def _mongo_add_followup(sesion_id: str, pregunta: str, respuesta: str):
         return res.modified_count > 0
     except Exception:
         return False
+
+
+def _memoria_json_compacta_user(user_id: str, max_sessions: int = 5, max_followups: int = 3, max_chars: int = 20000) -> str:
+    """Devuelve un JSON compacto con las últimas sesiones del usuario para usar como contexto.
+    Similar a _memoria_json_compacta pero filtra por user_id.
+    """
+    try:
+        # Intentar obtener de MongoDB primero
+        col = _get_mongo_collection()
+        if col is not None:
+            try:
+                cur = col.find(
+                    {"user_id": user_id},
+                    {"_id": 0, "id": 1, "created_at": 1, "archivo": 1, "contexto_emocional": 1, "interpretacion_resumen": 1, "followups": 1}
+                ).sort("created_at", -1).limit(max(1, max_sessions))
+                sesiones = list(cur)
+            except Exception:
+                sesiones = []
+        else:
+            # Fallback a memoria JSON local
+            from reporte6_BernardoBojalil import MEM
+            todas = MEM.get("sessions", [])
+            # Filtrar por user_id si existe
+            sesiones = [s for s in todas if s.get("user_id") == user_id]
+            sesiones = sorted(sesiones, key=lambda x: x.get("created_at", ""), reverse=True)[:max_sessions]
+        
+        recortadas = []
+        for s in sesiones:
+            fu = s.get("followups", []) or []
+            if max_followups > 0:
+                fu = fu[-max_followups:]
+            recortadas.append({
+                "id": s.get("id"),
+                "created_at": s.get("created_at"),
+                "archivo": s.get("archivo"),
+                "contexto_emocional": s.get("contexto_emocional"),
+                "interpretacion_resumen": s.get("interpretacion_resumen"),
+                "followups": fu,
+            })
+        data = {"sessions": recortadas}
+        texto = json.dumps(data, ensure_ascii=False, indent=2)
+        if len(texto) > max_chars:
+            # Compactar y, si aún es largo, truncar con marca
+            texto_comp = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            if len(texto_comp) > max_chars:
+                return texto_comp[: max_chars - 1].rstrip() + "…"
+            return texto_comp
+        return texto
+    except Exception as e:
+        return f"{{\"error\": \"no se pudo construir memoria json: {str(e)}\"}}"
 
 
 # --- Auth Functions ---
@@ -579,7 +630,8 @@ def interpret_text(req: InterpretTextRequest, current_user: Dict[str, Any] = Dep
                 prev_json_max = int(getenv("PREV_JSON_MAX_CHARS", "20000"))
             except ValueError:
                 prev_json_max = 20000
-            memoria_json = _memoria_json_compacta(prev_n, prev_fu_n, prev_json_max)
+            # Usar memoria filtrada por usuario
+            memoria_json = _memoria_json_compacta_user(user_id, prev_n, prev_fu_n, prev_json_max)
 
             payload = {
                 "texto_sueno": texto,
@@ -663,16 +715,77 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
         raise HTTPException(status_code=400, detail="ruta requerida")
 
     user_id = current_user["user_id"]
-    ruta_salida, interpretacion, sesion_id = interpretar_y_guardar(req.ruta, req.contexto_emocional or "")
+    
+    # Leer archivo
+    from reporte6_BernardoBojalil import leer_sueno, guardar_interpretacion
+    texto_sueno = leer_sueno(req.ruta)
+    if texto_sueno is None:
+        raise HTTPException(status_code=400, detail="No se pudo leer el archivo del sueño")
+    
+    # Interpretar con memoria filtrada por usuario
+    chain = construir_cadena_interprete()
+    interpretacion = ""
+    if chain is not None:
+        try:
+            from os import getenv
+            try:
+                prev_n = int(getenv("PREVIOUS_N", "5"))
+            except ValueError:
+                prev_n = 5
+            try:
+                prev_fu_n = int(getenv("PREV_FOLLOWUPS_N", "3"))
+            except ValueError:
+                prev_fu_n = 3
+            try:
+                prev_json_max = int(getenv("PREV_JSON_MAX_CHARS", "20000"))
+            except ValueError:
+                prev_json_max = 20000
+            # Usar memoria filtrada por usuario
+            memoria_json = _memoria_json_compacta_user(user_id, prev_n, prev_fu_n, prev_json_max)
+
+            payload = {
+                "texto_sueno": texto_sueno,
+                "contexto_emocional": req.contexto_emocional or "",
+                "memoria_json": memoria_json,
+            }
+            try:
+                timeout_secs = int(os.getenv("LLM_TIMEOUT_SECS", "20"))
+            except Exception:
+                timeout_secs = 20
+
+            def _invoke():
+                return chain.invoke(payload)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(_invoke)
+                res = fut.result(timeout=timeout_secs)
+            if isinstance(res, str):
+                interpretacion = res
+            else:
+                content = getattr(res, "content", None)
+                if isinstance(content, str) and content.strip():
+                    interpretacion = content
+                elif isinstance(res, dict) and "text" in res:
+                    interpretacion = str(res.get("text", ""))
+                else:
+                    interpretacion = str(res)
+        except concurrent.futures.TimeoutError:
+            interpretacion = ""
+        except Exception:
+            interpretacion = ""
+
+    if not (interpretacion or "").strip():
+        interpretacion = interpretar_offline(texto_sueno, req.contexto_emocional or "")
+    
     if not (interpretacion or "").strip():
         raise HTTPException(status_code=502, detail="No se pudo generar la interpretación. Revisa tu API key/red.")
     
+    # Guardar archivo
+    ruta_salida = guardar_interpretacion(req.ruta, interpretacion)
+    
     # Generar título automáticamente
     titulo = None
-    texto_sueno = ""
     try:
-        from reporte6_BernardoBojalil import leer_sueno
-        texto_sueno = leer_sueno(req.ruta) or ""
         if texto_sueno:
             titulo, _ = _generate_dream_title(texto_sueno)
     except Exception:
@@ -681,7 +794,8 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
     if not titulo:
         titulo = "Sueño interpretado"
     
-    # Si Mongo está disponible, reflejar la sesión allí también para unificar fuente de verdad de la API
+    # Crear sesión con user_id
+    sesion_id = None
     if _get_mongo_collection() is not None:
         try:
             mongo_id = _mongo_create_session(req.ruta, texto_sueno, req.contexto_emocional or "", interpretacion, ruta_salida, user_id, titulo)
@@ -689,6 +803,20 @@ def interpret_file(req: InterpretFileRequest, current_user: Dict[str, Any] = Dep
                 sesion_id = mongo_id
         except Exception:
             pass
+    else:
+        # Fallback a JSON local (pero agregar user_id)
+        try:
+            sesion_id = _crear_sesion(req.ruta, texto_sueno, req.contexto_emocional or "", interpretacion, ruta_salida)
+            # Intentar agregar user_id a la sesión creada
+            if sesion_id:
+                from reporte6_BernardoBojalil import MEM
+                for s in MEM.get("sessions", []):
+                    if s.get("id") == sesion_id:
+                        s["user_id"] = user_id
+                        break
+        except Exception:
+            pass
+    
     return {
         "interpretacion": interpretacion,
         "ruta_salida": ruta_salida,
@@ -725,22 +853,6 @@ def get_session(sesion_id: str, current_user: Dict[str, Any] = Depends(get_curre
     if s.get("user_id") and s.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="No tienes permiso para acceder a esta sesión")
     return s
-
-
-@app.post("/sessions/{sesion_id}/followup")
-def followup(sesion_id: str, req: FollowupRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-    user_id = current_user["user_id"]
-    s = _mongo_get_session(sesion_id, user_id) if _get_mongo_collection() is not None else None
-    if not s:
-        s = _buscar_sesion(sesion_id)
-    if not s:
-        raise HTTPException(status_code=404, detail="Sesión no encontrada")
-    # Verificar que la sesión pertenezca al usuario (si tiene user_id)
-    if s.get("user_id") and s.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="No tienes permiso para acceder a esta sesión")
-    pregunta = (req.pregunta or "").strip()
-    if not pregunta:
-        raise HTTPException(status_code=400, detail="pregunta requerida")
 
 
 @app.delete("/sessions/{sesion_id}")
