@@ -100,6 +100,9 @@ class GenerateImageRequest(BaseModel):
     sesion_id: Optional[str] = Field(None, description="ID de sesión para vincular la imagen")
 
 
+class GenerateTitleRequest(BaseModel):
+    descripcion_sueno: str = Field(..., description="Descripción del sueño para generar el título")
+
 
 # --- MongoDB (opcional) ---
 _MONGO_OK = False
@@ -449,6 +452,71 @@ def generate_image(req: GenerateImageRequest, current_user: Dict[str, Any] = Dep
     }
 
 
+# --- Title Generation ---
+def _generate_dream_title(descripcion: str) -> tuple[Optional[str], Optional[str]]:
+    """Genera un título breve del sueño usando Gemini. Retorna (title, error_msg)."""
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_key:
+        return None, "GEMINI_API_KEY no configurada"
+    
+    try:
+        from reporte6_BernardoBojalil import ChatGoogleGenerativeAI, LANGCHAIN_OK
+        
+        if not LANGCHAIN_OK or ChatGoogleGenerativeAI is None:
+            return None, "LangChain o ChatGoogleGenerativeAI no disponible"
+        
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=gemini_key,
+            temperature=0.7,
+        )
+        
+        # Prompt para generar título corto y descriptivo
+        prompt = f"""Genera un título muy breve y descriptivo (máximo 6 palabras) para este sueño. 
+Solo devuelve el título, sin explicaciones adicionales.
+
+Sueño: {descripcion[:500]}
+
+Título:"""
+        
+        response = llm.invoke(prompt)
+        title = response.content.strip().strip('"').strip("'")
+        
+        # Limitar a 60 caracteres máximo
+        if len(title) > 60:
+            title = title[:57] + "..."
+        
+        return title, None
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error generando título: {error_msg}")
+        return None, error_msg
+
+
+@app.post("/generate-title")
+def generate_title(req: GenerateTitleRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Genera un título breve del sueño usando Gemini."""
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(status_code=503, detail="GEMINI_API_KEY no configurada.")
+    
+    descripcion = (req.descripcion_sueno or "").strip()
+    if not descripcion:
+        raise HTTPException(status_code=400, detail="descripcion_sueno requerida")
+    
+    # Generar título
+    title, error_msg = _generate_dream_title(descripcion)
+    
+    if not title:
+        detail_msg = f"No se pudo generar el título: {error_msg}" if error_msg else "No se pudo generar el título."
+        raise HTTPException(status_code=502, detail=detail_msg)
+    
+    return {
+        "title": title,
+        "titulo": title,
+    }
+
+
 @app.get("/health")
 def health() -> Dict[str, Any]:
     try:
@@ -638,6 +706,92 @@ def get_session(sesion_id: str, current_user: Dict[str, Any] = Depends(get_curre
 
 @app.post("/sessions/{sesion_id}/followup")
 def followup(sesion_id: str, req: FollowupRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    user_id = current_user["user_id"]
+    s = _mongo_get_session(sesion_id, user_id) if _get_mongo_collection() is not None else None
+    if not s:
+        s = _buscar_sesion(sesion_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    # Verificar que la sesión pertenezca al usuario (si tiene user_id)
+    if s.get("user_id") and s.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="No tienes permiso para acceder a esta sesión")
+    pregunta = (req.pregunta or "").strip()
+    if not pregunta:
+        raise HTTPException(status_code=400, detail="pregunta requerida")
+
+
+@app.delete("/sessions/{sesion_id}")
+def delete_session(sesion_id: str, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Elimina una sesión del usuario actual."""
+    user_id = current_user["user_id"]
+    
+    # Intentar eliminar de MongoDB si está disponible
+    if _get_mongo_collection() is not None:
+        try:
+            col = _get_mongo_collection()
+            result = col.delete_one({"id": sesion_id, "user_id": user_id})
+            
+            if result.deleted_count > 0:
+                return {
+                    "message": "Sesión eliminada exitosamente",
+                    "sesion_id": sesion_id,
+                    "deleted": True
+                }
+            else:
+                raise HTTPException(status_code=404, detail="Sesión no encontrada o no tienes permiso para eliminarla")
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Error eliminando sesión de MongoDB: {e}")
+            raise HTTPException(status_code=500, detail="Error al eliminar la sesión")
+    
+    # Si no hay MongoDB, intentar eliminar del archivo JSON local
+    try:
+        import json
+        memoria_path = "memoria_agente.json"
+        
+        if not os.path.exists(memoria_path):
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+        
+        with open(memoria_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        sesiones = data.get("sesiones", [])
+        sesion_encontrada = False
+        nuevas_sesiones = []
+        
+        for s in sesiones:
+            if s.get("id") == sesion_id:
+                # Verificar que pertenezca al usuario
+                if s.get("user_id") and s.get("user_id") != user_id:
+                    raise HTTPException(status_code=403, detail="No tienes permiso para eliminar esta sesión")
+                sesion_encontrada = True
+                # No añadir esta sesión a nuevas_sesiones (eliminarla)
+            else:
+                nuevas_sesiones.append(s)
+        
+        if not sesion_encontrada:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+        
+        # Guardar el archivo actualizado
+        data["sesiones"] = nuevas_sesiones
+        with open(memoria_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        return {
+            "message": "Sesión eliminada exitosamente",
+            "sesion_id": sesion_id,
+            "deleted": True
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error eliminando sesión del archivo JSON: {e}")
+        raise HTTPException(status_code=500, detail="Error al eliminar la sesión")
+
+
+@app.post("/sessions/{sesion_id}/followup")
+def followup_handler(sesion_id: str, req: FollowupRequest, current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     user_id = current_user["user_id"]
     s = _mongo_get_session(sesion_id, user_id) if _get_mongo_collection() is not None else None
     if not s:

@@ -201,6 +201,14 @@ Para usar estos endpoints, incluye el header: `Authorization: Bearer {tu_token}`
   - Headers: `Authorization: Bearer {token}`
   - Devuelve el contenido completo de tu sesión (verifica que sea tuya).
 
+- `DELETE /sessions/{sesion_id}`
+  - Headers: `Authorization: Bearer {token}`
+  - Elimina una sesión del historial del usuario actual.
+  - Respuesta JSON:
+    - `message` (string): mensaje de confirmación
+    - `sesion_id` (string): id de la sesión eliminada
+    - `deleted` (boolean): true si se eliminó exitosamente
+
 - `POST /sessions/{sesion_id}/followup`
   - Headers: `Authorization: Bearer {token}`
   - Body JSON:
@@ -267,17 +275,79 @@ No requiere configuración adicional.
     - `estilo` (string): estilo aplicado
     - `size` (string): tamaño generado
 
-**Ejemplo en Postman:**
+#### Cómo probar en Postman
+
+**Paso 1: Obtener token de autenticación**
+- Method: `POST`
+- URL: `https://tu-app.onrender.com/login`
+- Body (JSON):
 ```json
 {
-  "descripcion_sueno": "Caminaba por un bosque oscuro iluminado por luciérnagas",
-  "estilo": "fantasía digital, colores vibrantes"
+  "email": "tu@email.com",
+  "password": "tu_password"
 }
 ```
+- Copia el `access_token` de la respuesta
+
+**Paso 2: Generar imagen**
+- Method: `POST`
+- URL: `https://tu-app.onrender.com/generate-image`
+- Headers:
+  - `Authorization: Bearer <tu_access_token>`
+  - `Content-Type: application/json`
+- Body (JSON):
+```json
+{
+  "descripcion_sueno": "Volaba sobre un océano de nubes doradas al atardecer",
+  "estilo": "arte digital vibrante"
+}
+```
+
+**Paso 3: Visualizar la imagen**
+- La respuesta contiene `image_url` con formato: `data:image/png;base64,iVBORw0KGg...`
+- Copia todo el contenido de `image_url`
+- Pégalo en la barra de direcciones de tu navegador (Chrome/Edge)
+- O usa una extensión de Postman para visualizar imágenes base64
 
 **Notas:**
 - Las imágenes se devuelven en formato base64 embebidas en la respuesta (no expiran).
 - Usa el modelo `gemini-2.5-flash-image` de Google.
+- Gratuito dentro de los límites de la API de Gemini.
+
+### Generación de Títulos
+
+Endpoint para generar títulos breves y descriptivos de sueños para mostrar en el historial.
+
+#### Endpoint de generación de títulos
+
+- `POST /generate-title`
+  - Headers: `Authorization: Bearer {token}`
+  - Body JSON:
+    - `descripcion_sueno` (string, requerido): descripción del sueño
+  - Respuesta JSON:
+    - `title` (string): título generado (máximo 6 palabras)
+    - `titulo` (string): título generado (mismo valor)
+
+**Ejemplo en Postman:**
+- Method: `POST`
+- URL: `https://tu-app.onrender.com/generate-title`
+- Headers:
+  - `Authorization: Bearer <tu_access_token>`
+  - `Content-Type: application/json`
+- Body (JSON):
+```json
+{
+  "descripcion_sueno": "Volaba sobre un océano de nubes doradas al atardecer"
+}
+```
+
+**Respuesta:**
+```json
+{
+  "title": "Vuelo sobre nubes doradas",
+  "titulo": "Vuelo sobre nubes doradas"
+}
+```
 ```
 
 ### Notas
