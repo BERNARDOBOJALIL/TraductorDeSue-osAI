@@ -216,6 +216,29 @@ Para usar estos endpoints, incluye el header: `Authorization: Bearer {tu_token}`
   - Respuesta JSON:
     - `respuesta` (string): respuesta breve del analista onírico.
 
+- `POST /generate-title`
+  - Headers: `Authorization: Bearer {token}`
+  - Body JSON:
+    - `descripcion_sueno` (string, requerido): descripción del sueño
+  - Respuesta JSON:
+    - `title` (string): título generado (máximo 6 palabras, 60 caracteres)
+    - `titulo` (string): título generado (mismo valor)
+  - Genera un título breve y descriptivo del sueño para mostrar en el historial.
+
+- `POST /generate-image`
+  - Headers: `Authorization: Bearer {token}`
+  - Body JSON:
+    - `descripcion_sueno` (string, requerido): descripción del sueño a visualizar
+    - `estilo` (string, opcional, default "surrealista y onírico"): estilo artístico
+    - `size` (string, opcional): tamaño de la imagen
+    - `sesion_id` (string, opcional): vincular imagen con una sesión existente
+  - Respuesta JSON:
+    - `image_url` (string): imagen en formato base64 data URL
+    - `descripcion` (string): descripción usada
+    - `estilo` (string): estilo aplicado
+    - `size` (string): tamaño generado
+  - Genera una imagen visual del sueño usando Gemini 2.5 Flash Image.
+
 ### Ejemplo de uso con autenticación
 
 ```powershell

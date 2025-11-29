@@ -468,23 +468,34 @@ def _generate_dream_title(descripcion: str) -> tuple[Optional[str], Optional[str
         llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             google_api_key=gemini_key,
-            temperature=0.7,
+            temperature=0.3,
         )
         
-        # Prompt para generar título corto y descriptivo
-        prompt = f"""Genera un título muy breve y descriptivo (máximo 6 palabras) para este sueño. 
-Solo devuelve el título, sin explicaciones adicionales.
+        # Prompt para generar título muy corto como portada
+        prompt = f"""Genera un título muy corto (máximo 3-4 palabras) para este sueño.
+El título debe ser como una portada de libro: breve, impactante y descriptivo.
+Responde SOLO con el título, sin comillas, sin explicaciones, sin puntos.
 
-Sueño: {descripcion[:500]}
+Ejemplos:
+- Vuelo sobre montañas
+- Caída al vacío
+- Encuentro con sombras
+- Mar de estrellas
+
+Descripción del sueño: {descripcion[:400]}
 
 Título:"""
         
         response = llm.invoke(prompt)
-        title = response.content.strip().strip('"').strip("'")
+        title = response.content.strip().strip('"').strip("'").strip(".")
         
-        # Limitar a 60 caracteres máximo
-        if len(title) > 60:
-            title = title[:57] + "..."
+        # Asegurar que sea muy corto (máximo 40 caracteres)
+        if len(title) > 40:
+            # Si es muy largo, tomar solo las primeras 3-4 palabras
+            words = title.split()[:4]
+            title = " ".join(words)
+            if len(title) > 40:
+                title = title[:37] + "..."
         
         return title, None
         
