@@ -22,7 +22,7 @@ from reporte6_BernardoBojalil import (
     _resumen_ultimas_sesiones,
 )
 
-app = FastAPI(title="Traductor de Sueños API", version="1.0.0")
+app = FastAPI(title="MoonBound API", version="1.0.0", description="Dream interpretation and visualization API powered by Gemini AI")
 
 # Security
 SECRET_KEY = os.getenv("SECRET_KEY", "tu-secret-key-super-segura-cambiala-en-produccion")
@@ -355,9 +355,10 @@ def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str
 # --- Image Generation ---
 def _generate_dream_image(descripcion: str, estilo: str = "surrealista y onírico", size: str = "1024x1024") -> tuple[Optional[str], Optional[str]]:
     """Genera una imagen usando Gemini 2.5 Flash Image. Retorna (data_url, error_msg)."""
-    gemini_key = os.getenv("GEMINI_API_KEY")
+    # Usar GEMINI_IMAGE_API_KEY si existe, sino usar GEMINI_API_KEY
+    gemini_key = os.getenv("GEMINI_IMAGE_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not gemini_key:
-        return None, "GEMINI_API_KEY no configurada"
+        return None, "GEMINI_IMAGE_API_KEY o GEMINI_API_KEY no configurada"
 
     try:
         from google import genai
@@ -457,9 +458,10 @@ def generate_image(req: GenerateImageRequest, current_user: Dict[str, Any] = Dep
 # --- Title Generation ---
 def _generate_dream_title(descripcion: str) -> tuple[Optional[str], Optional[str]]:
     """Genera un título breve del sueño usando Gemini. Retorna (title, error_msg)."""
-    gemini_key = os.getenv("GEMINI_API_KEY")
+    # Usar GEMINI_TEXT_API_KEY si existe, sino usar GEMINI_API_KEY
+    gemini_key = os.getenv("GEMINI_TEXT_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not gemini_key:
-        return None, "GEMINI_API_KEY no configurada"
+        return None, "GEMINI_TEXT_API_KEY o GEMINI_API_KEY no configurada"
     
     try:
         from reporte6_BernardoBojalil import ChatGoogleGenerativeAI, LANGCHAIN_OK

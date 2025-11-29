@@ -1,6 +1,8 @@
-# Traductor de Sueños (Gemini AI)
+# MoonBound - Dream Interpretation API
 
-Agente local que interpreta el archivo `sueño.txt` y escribe `sueño_interpretado.txt` usando Google Gemini vía LangChain. En consola muestra únicamente la sección “Interpretación general” con formato legible (colores opcionales con Colorama). Soporta preguntas de seguimiento (follow-up) por cada sueño interpretado.
+**MoonBound** es una API de interpretación y visualización de sueños impulsada por Google Gemini AI. Ofrece análisis psicológicos profundos, generación automática de títulos, creación de imágenes oníricas y gestión completa de sesiones con autenticación por usuario.
+
+Agente local que interpreta el archivo `sueño.txt` y escribe `sueño_interpretado.txt` usando Google Gemini vía LangChain. En consola muestra únicamente la sección "Interpretación general" con formato legible (colores opcionales con Colorama). Soporta preguntas de seguimiento (follow-up) por cada sueño interpretado.
 
 ## Características técnicas del agente
 
@@ -389,6 +391,23 @@ Endpoint para generar títulos breves y descriptivos de sueños para mostrar en 
 
 - `SECRET_KEY` (requerido en producción): clave secreta para firmar JWT tokens. Por defecto usa una clave de desarrollo insegura.
 - `ACCESS_TOKEN_EXPIRE_MINUTES` (opcional, por defecto 10080 = 7 días): tiempo de expiración del token en minutos.
+
+### API Keys opcionales separadas
+
+Puedes usar API keys diferentes para distintas funcionalidades de Gemini:
+
+- `GEMINI_API_KEY` (requerido): API key principal de Gemini. Se usa como fallback si las específicas no están configuradas.
+- `GEMINI_TEXT_API_KEY` (opcional): API key específica para interpretaciones de texto y generación de títulos. Si no está configurada, usa `GEMINI_API_KEY`.
+- `GEMINI_IMAGE_API_KEY` (opcional): API key específica para generación de imágenes. Si no está configurada, usa `GEMINI_API_KEY`.
+
+**Ejemplo en `.env`:**
+```env
+GEMINI_API_KEY=tu-api-key-principal
+GEMINI_TEXT_API_KEY=tu-api-key-para-texto
+GEMINI_IMAGE_API_KEY=tu-api-key-para-imagenes
+```
+
+Esto te permite usar diferentes proyectos de Google Cloud o gestionar cuotas por separado.
 
 ### MongoDB Atlas (opcional)
 
